@@ -12,28 +12,26 @@ Storage:
 - **Mongo is intentionally NOT used** for domain data.
 
 ## Phase plan
-- **Phase 0 — Risk POC + skeleton (complete, 2026-02):**
-  MiniLM → Chroma → KMeans → gpt-5 pipeline verified end-to-end against
-  `pallets/itsdangerous`. `/api/poc` (temporary) removed in Phase 1.
-- **Phase 1 — Ingestion pipeline + RAPTOR tree (in progress, 2026-02):**
-  - `POST /api/index` schedules a background ingest+build.
-  - `GET /api/index/status` state machine (idle → indexing → complete/failed).
-  - `GET /api/tree?owner=&name=` returns flat `{root_id, nodes}`.
-  - GitHub client: recursive code fetch (git trees + blobs), 20 recent merged
-    PRs with diff+comments, 20 recent issues with comments.
-  - Chunkers: python top-level split (ast) + text fallback; PR desc/diff split;
-    all chunks capped in tokens (tiktoken).
-  - Tree builder: chunks → topics (KMeans, k=max(2,min(6,n//4)), clamped) →
-    subsystems (KMeans, k=max(2,min(4,nt//2)), clamped) → root; every non-leaf
-    summary re-embedded and upserted into the same Chroma collection.
-  - Atomic re-index: build into a fresh collection, then `os.replace` the tree
-    JSON; drop the previous collection only on success. A failed re-index
-    leaves the prior tree/collection fully intact.
-  - Concurrency guard: second POST → **409**.
-  - Frontend: repo form (owner/name/paths + optional GH token), live status
-    poller (1.5s), collapsible tree sidebar, detail pane with summary/content/metadata.
-- **Phase 2 — Query API:** `/api/query` with token-budgeted multi-hop retrieval
-  (tree traversal + Chroma NN), rerank, `QueryResponse.naive_baseline_tokens`.
+- **Phase 0 — Risk POC (complete, 2026-02).**
+- **Phase 1 — Ingestion pipeline + RAPTOR tree (complete, 2026-02):**
+  `POST /api/index`, `GET /api/index/status`, `GET /api/tree`. Recursive GitHub
+  fetch (git trees + blobs, retry-after aware), token-capped chunkers,
+  hierarchical KMeans + gpt-5 summaries, atomic tree swap via `os.replace`.
+- **Phase 2 — Retrieval + `/api/query` (complete, 2026-02):**
+  Token-aware RAPTOR retrieval + gpt-5 answer.
+  - Embed query → Chroma top-N across ALL levels (chunks + summary embeddings).
+  - Score = similarity + level-mix bonus (subsystem +0.05, topic +0.03).
+  - Greedy pack under `token_budget` with **guarantee**: ≥1 subsystem + ≥2 topics
+    (parents pulled from the tree if search didn't surface them).
+  - Edge cases: `budget=0` → structured "too small" response (HTTP 200);
+    no index yet → structured "no repository indexed" response (HTTP 200).
+  - Context wrapped in explicit `<<<REPOSITORY_CONTEXT_START/END>>>` delimiters
+    so prompt-injection content in PR/issue bodies is unmistakably DATA.
+  - `naive_baseline_tokens` = sum of tiktokens of every PR chunk (desc+diff)
+    in the tree — "if you'd naively dumped every PR as context" upper bound.
+  - Frontend: query textarea + budget input + stats strip
+    (tokens packed / naive baseline / **saved-vs-naive %** / paths cited)
+    + answer viewer + collapsible node-paths list.
 - **Phase 3 — Product UI + Chrome extension** (CORS already permits `chrome-extension://*`).
 
 ## Personas
@@ -63,10 +61,9 @@ Storage:
 - `/api/poc` and its UI button removed.
 
 ## Backlog
-- **P0 (next):** `/api/query` — multi-hop retrieval with tiktoken budget
-  and `naive_baseline_tokens` field (Phase 2).
-- **P1:** per-topic reranker; smarter cluster count based on silhouette.
+- **P0:** authenticated real-repo happy-path run (needs GITHUB_TOKEN — user's PAT or env).
+- **P1:** re-run silhouette-based k-selection instead of hard heuristics.
 - **P1:** persistent per-repo status history so a page reload knows what was indexed.
-- **P2:** Chrome extension MVP (send selected code + open file to `/api/query`).
+- **P2:** Chrome extension MVP (send selected code + open file + `/api/query`).
 - **P2:** LLM-in-the-loop artifact summaries (currently artifacts have no summary to save cost).
 - **P3:** rate limiting, per-user isolation, background workers/queues.

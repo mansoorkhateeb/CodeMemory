@@ -21,8 +21,17 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.cors import CORSMiddleware
 
 import tree_store
+import retriever
 from index_manager import manager, wire_singletons
-from models import IndexRequest, IndexStatus, TreeNode, TreeResponse
+from llm import LLMError
+from models import (
+    IndexRequest,
+    IndexStatus,
+    QueryRequest,
+    QueryResponse,
+    TreeNode,
+    TreeResponse,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -120,6 +129,7 @@ async def _startup() -> None:
     await asyncio.to_thread(_get_embedder)
     await asyncio.to_thread(_get_chroma)
     wire_singletons(_embedder, _chroma_client)
+    retriever.wire(_embedder, _chroma_client)
     logger.info("codememory ready.")
 
 
@@ -193,6 +203,34 @@ async def tree(
         nodes=nodes,
         exists=True,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Query — token-budgeted RAPTOR retrieval + gpt-5 answer
+# --------------------------------------------------------------------------- #
+@api.post("/query", response_model=QueryResponse)
+async def query_endpoint(
+    body: QueryRequest, _token: str = Depends(require_bearer)
+) -> QueryResponse:
+    """Token-aware multi-hop retrieval over the persisted tree + Chroma.
+
+    Always returns HTTP 200 with a structured `QueryResponse` for the edge
+    cases (no repo indexed / budget too small); clients render `answer` as
+    the surfacing message and can key off `token_count == 0`.
+    Raises 502 if the underlying LLM call fails after a single retry.
+    """
+    q = (body.query or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query is required")
+    try:
+        return await retriever.answer_query(
+            query_text=q,
+            token_budget=max(0, int(body.token_budget)),
+            repo_owner=body.repo_owner,
+            repo_name=body.repo_name,
+        )
+    except LLMError as e:
+        raise HTTPException(status_code=502, detail=f"LLM failed: {e}") from e
 
 
 app.include_router(api)

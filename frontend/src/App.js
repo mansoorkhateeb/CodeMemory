@@ -387,6 +387,128 @@ function NodeDetail({ tree, nodeId }) {
   );
 }
 
+// ------------------------- query panel ------------------------- //
+function QueryPanel({ token, currentRepo, treeExists }) {
+  const [q, setQ] = useState("How did session handling evolve and why?");
+  const [budget, setBudget] = useState(30000);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [result, setResult] = useState(null);
+  const [elapsed, setElapsed] = useState(null);
+
+  const run = useCallback(async () => {
+    setErr(null); setBusy(true); setResult(null); setElapsed(null);
+    const t0 = performance.now();
+    try {
+      const body = {
+        query: q,
+        token_budget: Number(budget) || 0,
+        repo_owner: currentRepo?.owner,
+        repo_name: currentRepo?.name,
+      };
+      const r = await apiFetch("/query", { method: "POST", body, token });
+      setResult(r);
+    } catch (e) {
+      setErr({ status: e.status, msg: e.message });
+    } finally {
+      setElapsed(Math.round(performance.now() - t0));
+      setBusy(false);
+    }
+  }, [q, budget, currentRepo, token]);
+
+  const savings = result && result.naive_baseline_tokens > 0
+    ? Math.max(0, Math.round((1 - result.token_count / result.naive_baseline_tokens) * 100))
+    : null;
+
+  return (
+    <section className="cm-panel cm-query-panel" data-testid="query-panel">
+      <div className="cm-panel-title">query</div>
+      <textarea
+        className="cm-input cm-textarea"
+        rows={3}
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="ask a question about this repo — evolution, why, tradeoffs…"
+        data-testid="query-input"
+        spellCheck={false}
+      />
+      <div className="cm-query-controls">
+        <label className="cm-inline-label">
+          <span className="cm-label">token_budget</span>
+          <input
+            className="cm-input cm-input--narrow"
+            type="number"
+            min={0}
+            step={1000}
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
+            data-testid="budget-input"
+          />
+        </label>
+        <button
+          className="cm-btn cm-btn--primary"
+          onClick={run}
+          disabled={busy || !token || !treeExists || !q.trim()}
+          data-testid="run-query-btn"
+        >
+          {busy ? "querying…" : "ask"}
+        </button>
+        {elapsed != null && (
+          <span className="cm-elapsed" data-testid="query-elapsed">
+            {(elapsed / 1000).toFixed(2)}s
+          </span>
+        )}
+        {!treeExists && (
+          <span className="cm-err-inline">index a repo first</span>
+        )}
+      </div>
+
+      {err && (
+        <pre className="cm-pre cm-pre--err" data-testid="query-error">
+          {JSON.stringify(err, null, 2)}
+        </pre>
+      )}
+
+      {result && (
+        <div className="cm-query-result">
+          <div className="cm-stats cm-stats--slim" data-testid="query-stats">
+            <div className="cm-stat">
+              <div className="cm-stat-value" data-testid="stat-token-count">{result.token_count}</div>
+              <div className="cm-stat-label">tokens packed</div>
+            </div>
+            <div className="cm-stat">
+              <div className="cm-stat-value" data-testid="stat-baseline">{result.naive_baseline_tokens}</div>
+              <div className="cm-stat-label">naive baseline</div>
+            </div>
+            <div className="cm-stat">
+              <div className="cm-stat-value" data-testid="stat-savings">
+                {savings == null ? "—" : `${savings}%`}
+              </div>
+              <div className="cm-stat-label">saved vs naive</div>
+            </div>
+            <div className="cm-stat">
+              <div className="cm-stat-value" data-testid="stat-paths">{result.nodes_used.length}</div>
+              <div className="cm-stat-label">node paths cited</div>
+            </div>
+          </div>
+
+          <div className="cm-panel-title cm-panel-title--sub">answer</div>
+          <pre className="cm-pre cm-pre--code" data-testid="query-answer">{result.answer}</pre>
+
+          <details className="cm-details" open>
+            <summary>nodes used ({result.nodes_used.length})</summary>
+            <ul className="cm-paths-list" data-testid="query-paths">
+              {result.nodes_used.map((p, i) => (
+                <li key={i} className="cm-path-item">{p}</li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ------------------------- app ------------------------- //
 function App() {
   const [token, setTokenRaw] = useState(
@@ -530,6 +652,8 @@ function App() {
           ))}
         </div>
       )}
+
+      <QueryPanel token={token} currentRepo={currentRepo} treeExists={!!tree?.exists} />
 
       <div className="cm-tree-grid">
         <TreeSidebar tree={tree} selected={selected} onSelect={setSelected} />

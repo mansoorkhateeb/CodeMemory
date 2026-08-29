@@ -59,3 +59,18 @@ class TreeResponse(BaseModel):
     root_id: Optional[str] = None
     nodes: Dict[str, TreeNode] = Field(default_factory=dict)
     exists: bool = True
+
+
+class QueryRequest(BaseModel):
+    query: str
+    token_budget: int = 30000
+    # optional repo scoping — defaults to the last-indexed / only tree
+    repo_owner: Optional[str] = None
+    repo_name: Optional[str] = None
+
+
+class QueryResponse(BaseModel):
+    answer: str
+    nodes_used: List[str] = Field(default_factory=list)
+    token_count: int = 0
+    naive_baseline_tokens: int = 0
