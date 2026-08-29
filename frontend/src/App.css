@@ -460,3 +460,70 @@ body {
   font-family: var(--cm-mono);
   font-size: 12px;
 }
+
+/* -------- guide modal -------- */
+.cm-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  backdrop-filter: blur(6px);
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px;
+  overflow-y: auto;
+}
+.cm-modal {
+  background: var(--cm-panel);
+  border: 1px solid var(--cm-border);
+  border-radius: 14px;
+  width: min(920px, 100%);
+  max-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.cm-modal-head {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--cm-border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cm-modal-body { padding: 4px 24px 20px; overflow-y: auto; }
+.cm-md { color: var(--cm-fg); font-size: 14px; line-height: 1.6; }
+.cm-md h1 { font-size: 22px; margin: 24px 0 8px; letter-spacing: -0.01em; }
+.cm-md h2 { font-size: 17px; margin: 22px 0 6px; color: var(--cm-accent); font-family: var(--cm-mono); font-weight: 600; }
+.cm-md h3 { font-size: 14px; margin: 16px 0 4px; color: var(--cm-accent-2); font-family: var(--cm-mono); }
+.cm-md p { margin: 6px 0 10px; }
+.cm-md code {
+  font-family: var(--cm-mono);
+  font-size: 12.5px;
+  background: var(--cm-bg-2);
+  border: 1px solid var(--cm-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--cm-accent-3);
+  word-break: break-all;
+}
+.cm-md strong { color: var(--cm-fg); font-weight: 600; }
+.cm-md a { color: var(--cm-accent-3); text-decoration: none; border-bottom: 1px dashed rgba(121,192,255,0.4); }
+.cm-md a:hover { color: var(--cm-fg); }
+.cm-md ul, .cm-md ol { padding-left: 22px; margin: 6px 0 12px; }
+.cm-md li { margin: 4px 0; }
+.cm-md hr { border: none; border-top: 1px dashed var(--cm-border); margin: 20px 0; }
+.cm-md table {
+  width: 100%; border-collapse: collapse; margin: 10px 0 18px;
+  font-size: 12.5px; font-family: var(--cm-mono);
+}
+.cm-md th, .cm-md td {
+  border: 1px solid var(--cm-border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.cm-md th {
+  background: var(--cm-bg-2);
+  color: var(--cm-fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 11px;
+}

@@ -40,8 +40,109 @@ async function apiFetch(path, { method = "GET", body, token, timeout = 45000 } =
   }
 }
 
+// -------------------- tiny markdown renderer (guide only) -------------------- //
+function renderMarkdown(md) {
+  const lines = (md || "").split("\n");
+  const out = [];
+  let i = 0;
+  const inlineFmt = (s) =>
+    s
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^#\s+/.test(line))      { out.push(`<h1>${inlineFmt(line.slice(2))}</h1>`); i++; continue; }
+    if (/^##\s+/.test(line))     { out.push(`<h2>${inlineFmt(line.slice(3))}</h2>`); i++; continue; }
+    if (/^###\s+/.test(line))    { out.push(`<h3>${inlineFmt(line.slice(4))}</h3>`); i++; continue; }
+    if (/^---\s*$/.test(line))   { out.push("<hr/>"); i++; continue; }
+    if (/^\s*$/.test(line))      { i++; continue; }
+    // table: header row + separator row
+    if (/^\|.*\|$/.test(line) && i + 1 < lines.length && /^\|[\s:|-]+\|$/.test(lines[i + 1])) {
+      const headers = line.slice(1, -1).split("|").map(s => s.trim());
+      i += 2;
+      const rows = [];
+      while (i < lines.length && /^\|.*\|$/.test(lines[i])) {
+        rows.push(lines[i].slice(1, -1).split("|").map(s => s.trim()));
+        i++;
+      }
+      out.push(
+        `<table><thead><tr>${headers.map(h => `<th>${inlineFmt(h)}</th>`).join("")}</tr></thead>` +
+        `<tbody>${rows.map(r => `<tr>${r.map(c => `<td>${inlineFmt(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+      );
+      continue;
+    }
+    // ordered list
+    if (/^\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\d+\.\s+/, "")); i++;
+      }
+      out.push(`<ol>${items.map(x => `<li>${inlineFmt(x)}</li>`).join("")}</ol>`);
+      continue;
+    }
+    // unordered list
+    if (/^-\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^-\s+/.test(lines[i])) {
+        items.push(lines[i].slice(2)); i++;
+      }
+      out.push(`<ul>${items.map(x => `<li>${inlineFmt(x)}</li>`).join("")}</ul>`);
+      continue;
+    }
+    // paragraph
+    const buf = [];
+    while (i < lines.length && !/^(#|##|###|-\s|\d+\.\s|---|\|)/.test(lines[i]) && !/^\s*$/.test(lines[i])) {
+      buf.push(lines[i]); i++;
+    }
+    if (buf.length) out.push(`<p>${inlineFmt(buf.join(" "))}</p>`);
+  }
+  return out.join("\n");
+}
+
+function GuideModal({ onClose }) {
+  const [md, setMd] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API}/downloads/guide`);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        setMd(await r.text());
+      } catch (e) { setErr(e.message); }
+    })();
+  }, []);
+  const html = useMemo(() => (md ? renderMarkdown(md) : null), [md]);
+  return (
+    <div className="cm-modal-backdrop" onClick={onClose} data-testid="guide-modal">
+      <div className="cm-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="cm-modal-head">
+          <div className="cm-panel-title" style={{ margin: 0 }}>user guide</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <a
+              className="cm-btn cm-btn--ghost"
+              href={`${API}/downloads/guide`}
+              download="CodeMemory-user-guide.md"
+              data-testid="guide-download-md"
+            >
+              download .md
+            </a>
+            <button className="cm-btn cm-btn--ghost" onClick={onClose} data-testid="guide-close">close</button>
+          </div>
+        </div>
+        <div className="cm-modal-body">
+          {err && <div className="cm-banner cm-banner--err">could not load guide: {err}</div>}
+          {!md && !err && <div className="cm-empty">loading…</div>}
+          {html && <div className="cm-md" dangerouslySetInnerHTML={{ __html: html }} data-testid="guide-content" />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // -------------------- top bar & settings -------------------- //
-function TopBar({ health, onRefreshHealth, authOk, onToggleSettings, settingsOpen }) {
+function TopBar({ health, onRefreshHealth, authOk, onToggleSettings, settingsOpen, onOpenGuide }) {
   const dotCls =
     health.state === "ok" ? "cm-dot cm-dot--ok" :
     health.state === "checking" ? "cm-dot cm-dot--warn" : "cm-dot cm-dot--err";
@@ -76,6 +177,13 @@ function TopBar({ health, onRefreshHealth, authOk, onToggleSettings, settingsOpe
           <span>{authOk === false ? "token: invalid" : authOk ? "token: ok" : "token: unknown"}</span>
         </div>
         <button
+          className="cm-btn cm-btn--ghost"
+          onClick={onOpenGuide}
+          data-testid="guide-toggle"
+        >
+          guide
+        </button>
+        <button
           className={"cm-btn cm-btn--ghost" + (settingsOpen ? " is-active" : "")}
           onClick={onToggleSettings}
           data-testid="settings-toggle"
@@ -94,7 +202,7 @@ function SettingsPanel({ token, setToken, onClose }) {
   return (
     <div className="cm-settings" data-testid="settings-panel">
       <div className="cm-panel-title">settings</div>
-      <label className="cm-label" htmlFor="cm-token">api bearer token</label>
+      <label class="cm-label" htmlFor="cm-token">CodeMemory API token (app password)</label>
       <div className="cm-settings-row">
         <input
           id="cm-token"
@@ -115,7 +223,7 @@ function SettingsPanel({ token, setToken, onClose }) {
           save
         </button>
       </div>
-      <p className="cm-hint">stored in localStorage · required for every non-/health endpoint</p>
+      <p className="cm-hint">not your GitHub token · stored in localStorage · required for every non-/health endpoint</p>
     </div>
   );
 }
@@ -283,7 +391,7 @@ function RepoForm({ token, disabled, onStarted, onLoadExisting }) {
                  value={paths} onChange={(e) => setPaths(e.target.value)} spellCheck={false} />
         </div>
         <div className="cm-form-wide">
-          <label className="cm-label" htmlFor="cm-ghtok">github token (optional)</label>
+          <label className="cm-label" htmlFor="cm-ghtok">github token (optional — only for indexing real GitHub repos)</label>
           <input id="cm-ghtok" data-testid="github-token-input" className="cm-input" type="password"
                  value={ghToken} placeholder="ghp_… (avoids the 60 req/hr limit)"
                  onChange={(e) => setGhToken(e.target.value)} spellCheck={false} autoComplete="off" />
@@ -382,6 +490,14 @@ function HomePage({ token, status, tree, onStarted, onLoadExisting }) {
             download
           >
             ↓ VS Code extension (.vsix)
+          </a>
+          <a
+            className="cm-btn"
+            href={`${API}/downloads/guide`}
+            data-testid="download-guide-md"
+            download="CodeMemory-user-guide.md"
+          >
+            ↓ User guide (.md)
           </a>
           <span className="cm-hint" style={{ margin: 0 }}>
             no auth required · configure the backend URL + your bearer token after install
@@ -625,6 +741,7 @@ function App() {
   const [health, setHealth] = useState({ state: "checking" });
   const [authOk, setAuthOk] = useState(null); // null=unknown, true=ok, false=rejected
   const [settingsOpen, setSettingsOpen] = useState(!token);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const [status, setStatus] = useState({
     status: "idle",
@@ -787,8 +904,10 @@ function App() {
         authOk={authOk}
         settingsOpen={settingsOpen}
         onToggleSettings={() => setSettingsOpen((s) => !s)}
+        onOpenGuide={() => setGuideOpen(true)}
       />
       {settingsOpen && <SettingsPanel token={token} setToken={setToken} onClose={() => setSettingsOpen(false)} />}
+      {guideOpen && <GuideModal onClose={() => setGuideOpen(false)} />}
       <GlobalBanners health={health} authOk={authOk} token={token} />
 
       <div className="cm-app-body">

@@ -252,6 +252,28 @@ def _serve_artifact(filename: str, media_type: str) -> FileResponse:
     )
 
 
+_GUIDE_PATH = Path("/app/USER_GUIDE.md")
+
+
+@api.api_route("/downloads/guide", methods=["GET", "HEAD"])
+async def download_guide() -> FileResponse:
+    """Public download of the plain-language user guide (markdown).
+
+    Also fetched by the in-app 'Guide' viewer over CORS.
+    """
+    if not _GUIDE_PATH.exists():
+        raise HTTPException(status_code=404, detail="USER_GUIDE.md not found")
+    return FileResponse(
+        path=str(_GUIDE_PATH),
+        media_type="text/markdown; charset=utf-8",
+        filename="CodeMemory-user-guide.md",
+        headers={
+            "Content-Disposition": 'inline; filename="CodeMemory-user-guide.md"',
+            "Cache-Control": "public, max-age=60",
+        },
+    )
+
+
 @api.api_route("/downloads/chrome", methods=["GET", "HEAD"])
 async def download_chrome() -> FileResponse:
     """Public download of the packaged Chrome extension (MV3, vanilla JS)."""
