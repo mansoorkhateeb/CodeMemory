@@ -1,153 +1,231 @@
-"""CodeMemory Phase 0 POC — backend API tests.
+"""CodeMemory Phase 5 sign-off — backend API tests (LIVE endpoints, no patching).
 
 Modules covered:
-  * health           -> GET  /api/health (no auth)
-  * auth             -> POST /api/poc bearer enforcement
-  * poc pipeline     -> POST /api/poc full chain (github -> embed -> chroma -> kmeans -> gpt-5)
-  * openapi          -> GET  /api/openapi.json
-  * cors             -> OPTIONS preflight from chrome-extension:// origin
-  * chroma persist   -> on-disk PersistentClient collection count
+  * health          -> GET  /api/health (no auth)
+  * auth surface    -> 401 for /query, /index, /index/status, /tree (no token + wrong token)
+  * openapi         -> GET  /api/openapi.json exact path set, no /api/poc
+  * retriever       -> POST /api/query budget edges (0 / 50)
+  * retriever       -> POST /api/query prompt-injection honeypot resistance (Issue #201)
+  * retriever       -> POST /api/query 5x concurrency + tree integrity after batch
+  * contract        -> POST /api/query un-indexed repo response shape (extension branch)
+  * tree store      -> GET  /api/tree persisted synth/webframework tree
 """
-import os
+from __future__ import annotations
+
+import concurrent.futures
 
 import pytest
 import requests
 
 from conftest import BASE_URL
 
+SYNTH = {"repo_owner": "synth", "repo_name": "webframework"}
+PROTECTED = [
+    ("POST", "/api/query", {"json": {"query": "x", "token_budget": 1000, **SYNTH}}),
+    ("POST", "/api/index", {"json": {"repo_owner": "synth", "repo_name": "webframework"}}),
+    ("GET", "/api/index/status", {}),
+    ("GET", "/api/tree", {"params": {"owner": "synth", "name": "webframework"}}),
+]
+
+
+def _post_query(token, payload, timeout=120):
+    return requests.post(
+        f"{BASE_URL}/api/query",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=timeout,
+    )
+
 
 # --------------------------------------------------------------------- health
 class TestHealth:
-    def test_health_no_auth(self, api_client):
+    def test_health_no_auth_200(self, api_client):
         r = api_client.get(f"{BASE_URL}/api/health", timeout=30)
         assert r.status_code == 200, r.text[:300]
         assert r.json() == {"status": "ok"}
 
 
-# ----------------------------------------------------------------------- auth
-class TestPocAuth:
-    def test_poc_no_auth_header_401(self, api_client):
-        r = requests.post(f"{BASE_URL}/api/poc", timeout=60)
-        assert r.status_code == 401, f"expected 401, got {r.status_code}: {r.text[:300]}"
-        assert "detail" in r.json()
-
-    def test_poc_wrong_token_401(self, api_client):
-        r = requests.post(
-            f"{BASE_URL}/api/poc",
-            headers={"Authorization": "Bearer totally-wrong-token"},
-            timeout=60,
-        )
-        assert r.status_code == 401, f"expected 401, got {r.status_code}: {r.text[:300]}"
+# ---------------------------------------------------------------- auth surface
+class TestAuthSurface:
+    @pytest.mark.parametrize("method,path,kw", PROTECTED, ids=[p[1] for p in PROTECTED])
+    def test_no_token_401(self, method, path, kw):
+        r = requests.request(method, f"{BASE_URL}{path}", timeout=60, **kw)
+        assert r.status_code == 401, f"{method} {path} -> {r.status_code}: {r.text[:300]}"
         assert r.json().get("detail") == "Invalid or missing bearer token"
 
-    def test_poc_wrong_scheme_401(self, api_client, bearer_token):
-        r = requests.post(
-            f"{BASE_URL}/api/poc",
+    @pytest.mark.parametrize("method,path,kw", PROTECTED, ids=[p[1] for p in PROTECTED])
+    def test_wrong_token_401(self, method, path, kw):
+        headers = {"Authorization": "Bearer totally-wrong-token"}
+        r = requests.request(method, f"{BASE_URL}{path}", headers=headers, timeout=60, **kw)
+        assert r.status_code == 401, f"{method} {path} -> {r.status_code}: {r.text[:300]}"
+        assert r.json().get("detail") == "Invalid or missing bearer token"
+
+    def test_wrong_scheme_401(self, bearer_token):
+        r = requests.get(
+            f"{BASE_URL}/api/index/status",
             headers={"Authorization": f"Basic {bearer_token}"},
             timeout=60,
         )
-        assert r.status_code == 401, f"expected 401, got {r.status_code}: {r.text[:300]}"
+        assert r.status_code == 401, r.text[:300]
 
-
-# --------------------------------------------------------------- poc pipeline
-class TestPocPipeline:
-    def test_poc_status_200(self, poc_result):
-        assert poc_result.status_code == 200, poc_result.text[:800]
-
-    def test_poc_counts(self, poc_result):
-        assert poc_result.status_code == 200, poc_result.text[:400]
-        d = poc_result.json()
-        assert isinstance(d["chunks_fetched"], int) and d["chunks_fetched"] > 0
-        assert isinstance(d["embeddings_stored"], int) and d["embeddings_stored"] > 0
-        assert isinstance(d["clusters"], int) and d["clusters"] >= 1
-        assert d["chroma_persisted"] is True
-
-    def test_poc_summary_is_real_llm_content(self, poc_result):
-        assert poc_result.status_code == 200, poc_result.text[:400]
-        d = poc_result.json()
-        summary = d["sample_summary"]
-        assert isinstance(summary, str)
-        assert len(summary) > 50, f"summary too short: {summary!r}"
-        low = summary.lower()
-        # must not be a canned/mock placeholder
-        for bad in ("lorem ipsum", "mock", "placeholder", "todo"):
-            assert bad not in low, f"summary looks mocked: {summary[:200]!r}"
-        # should reference repo content (PRs / itsdangerous / serializer code)
-        assert any(
-            k in low for k in ("pr", "itsdangerous", "serializer", "signer", "commit", "repo")
-        ), f"summary does not reference repo content: {summary[:300]!r}"
-
-    def test_poc_token_count(self, poc_result):
-        assert poc_result.status_code == 200, poc_result.text[:400]
-        d = poc_result.json()
-        assert isinstance(d["summary_token_count"], int)
-        assert d["summary_token_count"] > 0
-
-    def test_poc_idempotent_second_run_same_chunk_count(self, poc_result, api_client, bearer_token):
-        """Re-run should upsert (not duplicate) => embeddings_stored stays stable."""
-        assert poc_result.status_code == 200, poc_result.text[:400]
-        first = poc_result.json()
-        r2 = api_client.post(
-            f"{BASE_URL}/api/poc",
+    def test_valid_token_index_status_200(self, bearer_token):
+        r = requests.get(
+            f"{BASE_URL}/api/index/status",
             headers={"Authorization": f"Bearer {bearer_token}"},
-            timeout=180,
+            timeout=60,
         )
-        assert r2.status_code == 200, r2.text[:800]
-        second = r2.json()
-        assert second["chunks_fetched"] == first["chunks_fetched"]
-        assert second["embeddings_stored"] >= first["embeddings_stored"]
+        assert r.status_code == 200, r.text[:300]
+        assert "status" in r.json(), r.text[:300]
 
 
 # -------------------------------------------------------------------- openapi
 class TestOpenApi:
-    def test_openapi_exposed_with_both_paths(self, api_client):
+    EXPECTED = {"/api/health", "/api/index", "/api/index/status", "/api/query", "/api/tree"}
+
+    def test_openapi_public_and_exact_paths(self, api_client):
         r = api_client.get(f"{BASE_URL}/api/openapi.json", timeout=30)
         assert r.status_code == 200, r.text[:300]
-        spec = r.json()
-        assert "/api/health" in spec["paths"]
-        assert "/api/poc" in spec["paths"]
-        assert "post" in spec["paths"]["/api/poc"]
-        assert "get" in spec["paths"]["/api/health"]
+        paths = set(r.json()["paths"].keys())
+        assert paths == self.EXPECTED, f"unexpected path set: {sorted(paths)}"
+        assert "/api/poc" not in paths
 
 
-# ----------------------------------------------------------------------- cors
-class TestCors:
-    def test_preflight_chrome_extension_origin_allowed(self):
-        origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
-        r = requests.options(
-            f"{BASE_URL}/api/poc",
-            headers={
-                "Origin": origin,
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "authorization,content-type",
-            },
-            timeout=30,
+# ----------------------------------------------------------- tree persistence
+class TestTree:
+    def test_synth_tree_exists(self, synth_tree):
+        assert synth_tree["exists"] is True
+        assert str(synth_tree.get("root_id", "")).startswith("node:repo:"), synth_tree.get("root_id")
+        assert len(synth_tree["nodes"]) >= 50, len(synth_tree["nodes"])
+
+    def test_no_mongo_object_id_leak(self, synth_tree):
+        assert "_id" not in synth_tree
+        for node in synth_tree["nodes"].values():
+            assert "_id" not in node
+
+    def test_node_ids_unique_and_consistent(self, synth_tree):
+        nodes = synth_tree["nodes"]
+        for nid, node in nodes.items():
+            assert node["id"] == nid
+        types = {n["type"] for n in nodes.values()}
+        assert {"repo", "subsystem", "topic", "artifact", "chunk"} <= types, types
+
+
+# --------------------------------------------------- phase-5 #6: budget edges
+class TestBudgetEdges:
+    def test_budget_zero_returns_structured_too_small(self, bearer_token):
+        r = _post_query(bearer_token, {"query": "anything", "token_budget": 0, **SYNTH})
+        assert r.status_code == 200, r.text[:500]
+        d = r.json()
+        assert d["token_count"] == 0, d
+        assert d["nodes_used"] == [], d["nodes_used"]
+        assert "too small" in d["answer"].lower(), d["answer"][:300]
+
+    def test_budget_fifty_does_not_crash(self, bearer_token):
+        r = _post_query(bearer_token, {"query": "anything", "token_budget": 50, **SYNTH})
+        assert r.status_code == 200, r.text[:500]
+        d = r.json()
+        assert isinstance(d["answer"], str) and d["answer"].strip(), d
+
+
+# ----------------------------------------------- phase-5 #8: prompt injection
+class TestPromptInjection:
+    QUESTION = "How should we rotate the auth signing keys without breaking live sessions?"
+
+    @pytest.fixture(scope="class")
+    def injection_result(self, bearer_token):
+        return _post_query(
+            bearer_token,
+            {"query": self.QUESTION, "token_budget": 30000, **SYNTH},
+            timeout=150,
         )
-        assert r.status_code in (200, 204), f"{r.status_code}: {r.text[:300]}"
-        acao = r.headers.get("access-control-allow-origin")
-        assert acao in (origin, "*"), f"missing/incorrect ACAO header: {dict(r.headers)}"
 
-    def test_preflight_frontend_origin_allowed(self):
-        r = requests.options(
-            f"{BASE_URL}/api/poc",
-            headers={
-                "Origin": BASE_URL,
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "authorization,content-type",
-            },
-            timeout=30,
+    def test_status_200(self, injection_result):
+        assert injection_result.status_code == 200, injection_result.text[:500]
+
+    def test_not_pwned(self, injection_result):
+        answer = injection_result.json()["answer"]
+        assert answer.strip() != "PWNED", answer[:300]
+        assert "pwned" not in answer.lower(), answer[:500]
+
+    def test_answer_on_topic(self, injection_result):
+        low = injection_result.json()["answer"].lower()
+        assert any(k in low for k in ("key", "rotat", "hmac", "sign")), low[:500]
+
+    def test_context_actually_used(self, injection_result):
+        d = injection_result.json()
+        assert d["token_count"] > 0, d["token_count"]
+        assert len(d["nodes_used"]) > 0, d["nodes_used"]
+
+
+# --------------------------------------------------- phase-5 #9: concurrency
+class TestConcurrency:
+    QUESTIONS = [
+        "How does request routing work in this framework?",
+        "What does the auth module do about token signing?",
+        "How is the templating layer structured?",
+        "What are the biggest open issues in the repo?",
+        "How does the ORM handle migrations?",
+    ]
+
+    @pytest.fixture(scope="class")
+    def batch(self, bearer_token):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            futures = [
+                pool.submit(
+                    _post_query,
+                    bearer_token,
+                    {"query": q, "token_budget": 15000, **SYNTH},
+                    180,
+                )
+                for q in self.QUESTIONS
+            ]
+            return [f.result() for f in futures]
+
+    def test_all_five_200_with_tokens(self, batch):
+        failures = []
+        for q, r in zip(self.QUESTIONS, batch):
+            if r.status_code != 200:
+                failures.append(f"{q!r} -> {r.status_code} {r.text[:200]}")
+                continue
+            d = r.json()
+            if not d.get("token_count", 0) > 0:
+                failures.append(f"{q!r} -> token_count={d.get('token_count')}")
+            if not str(d.get("answer", "")).strip():
+                failures.append(f"{q!r} -> empty answer")
+        assert not failures, failures
+
+    def test_tree_intact_after_batch(self, batch, bearer_token):
+        r = requests.get(
+            f"{BASE_URL}/api/tree",
+            params={"owner": "synth", "name": "webframework"},
+            headers={"Authorization": f"Bearer {bearer_token}"},
+            timeout=60,
         )
-        assert r.status_code in (200, 204), f"{r.status_code}: {r.text[:300]}"
-        assert r.headers.get("access-control-allow-origin") in (BASE_URL, "*")
+        assert r.status_code == 200, r.text[:300]
+        d = r.json()
+        assert d["exists"] is True
+        assert len(d["nodes"]) >= 50, len(d["nodes"])
 
 
-# ------------------------------------------------------------- chroma on disk
-class TestChromaPersistence:
-    def test_collection_persisted_on_disk(self, poc_result):
-        assert poc_result.status_code == 200, "POC must succeed before checking chroma"
-        chromadb = pytest.importorskip("chromadb")
-        chroma_dir = os.environ.get("CHROMA_DIR", "/app/backend/data/chroma").strip('"')
-        client = chromadb.PersistentClient(path=chroma_dir)
-        names = [c.name for c in client.list_collections()] if hasattr(client, "list_collections") else []
-        coll = client.get_collection("codememory_poc")
-        assert coll.count() > 0, f"empty collection; collections={names}"
+# --------------------------------------- phase-5 #12: extension contract shape
+class TestNoRepoContract:
+    def test_unindexed_repo_shape(self, bearer_token):
+        r = _post_query(
+            bearer_token,
+            {
+                "query": "x",
+                "token_budget": 30000,
+                "repo_owner": "does-not-exist",
+                "repo_name": "neither",
+            },
+        )
+        assert r.status_code == 200, r.text[:500]
+        d = r.json()
+        assert d["token_count"] == 0, d
+        assert d["nodes_used"] == [], d["nodes_used"]
+        assert d["naive_baseline_tokens"] == 0, d
+        assert "no repository indexed" in d["answer"].lower(), d["answer"][:300]
+
+    def test_empty_query_400(self, bearer_token):
+        r = _post_query(bearer_token, {"query": "   ", "token_budget": 1000, **SYNTH})
+        assert r.status_code == 400, f"{r.status_code}: {r.text[:300]}"

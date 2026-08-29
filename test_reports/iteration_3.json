@@ -1,0 +1,37 @@
+{
+  "summary": "Targeted verification of the iteration-2 HIGH-priority loadTree race fix (treeReqIdRef staleness guard in /app/frontend/src/App.js). RESULT: the race is NOT fixed — reproduced 2 out of 3 attempts (RUN1 FAIL, RUN2 PASS, RUN3 FAIL) with the exact requested steps (seed localStorage token -> reload -> fill synth/webframework -> click load-tree-btn immediately, no wait > 300ms -> observe after 5-6s): subsystems=0, tree-empty=1, sidebar-repo='synth/webframework', Query tab shows 'no tree — index first'. Clicking load-tree-btn a second time recovers (subsystems=3). All 3 requested regressions PASS: full query flow (10962 packed / 15630 baseline / 30% saved, 3170-char answer, no 'pwned' leak), wrong-token (banner-auth-error + auth-chip data-auth-state='bad'), no-token (banner-no-token + settings-panel auto-opened). Backend spot checks PASS: GET /api/tree?owner=synth&name=webframework -> exists=true, root_id='node:repo:ece62f0d7e', 52 nodes; POST /api/query with token_budget=0 -> 200, token_count=0, nodes_used=[], answer='Token budget too small to build any context.'",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Click load-tree-btn within ~5s of page load (loadTree race — STILL BROKEN after fix)",
+        "issue": "The monotonic treeReqIdRef guard only protects the ordering where the STALE request is issued FIRST. Observed network order (from Playwright requestfinished logs): /api/index/status -> [user click] /api/tree?owner=synth&name=webframework -> /api/tree?owner=pallets&name=itsdangerous (x2, StrictMode). The mount effect awaits /api/index/status BEFORE calling loadTree(DEFAULT_REPO), so its loadTree starts AFTER the user's click and therefore takes the HIGHER request id — the guard considers the pallets/itsdangerous response the freshest and calls setTree() with {exists:false}. The second guard (t.repo_owner/t.repo_name mismatch) also does not help, because the response genuinely matches the repo it requested (pallets), not the repo the user selected. Net effect for the user is unchanged from iteration 2: sidebar-repo reads 'synth/webframework' while tree-empty ('no tree for this repo yet') renders and the Query tab reports 'no tree — index first' even though /api/tree returns 52 nodes server-side. Frequency 2/3 runs (timing dependent on /api/index/status latency).",
+        "affected_selectors": ["load-tree-btn", "tree-empty", "sidebar-repo", "query-error", "run-query-btn"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "action_items": [
+    "FIX (HIGH, still open): the guard must be keyed on the SELECTED repo, not just on request order. Recommended: (a) in the mount effect, skip loadTree(DEFAULT_REPO) if the user has already triggered a tree load (e.g. bump treeReqIdRef on load-tree-btn click and capture its value before the /index/status await, then bail if it changed), and (b) inside loadTree compare (owner,name) against a currentRepoRef that is updated synchronously on user selection, dropping any response whose repo !== the currently selected repo. Either change alone fixes the observed ordering; both together make it order-independent."
+  ],
+  "critical_code_review_comments": [
+    "frontend/src/App.js:670-690 — the mount effect awaits /api/index/status before calling loadTree(DEFAULT_REPO). That await is precisely what makes the DEFAULT_REPO request the LAST one, so a request-id-only guard can never suppress it. Guard the effect itself (capture treeReqIdRef.current before the await and bail if it moved) and/or compare against a synchronously-updated currentRepoRef inside loadTree.",
+    "frontend/src/App.js:657-658 — the repo_owner/repo_name mismatch check compares the response against the arguments of the SAME call, so it can only catch a server mismatch; it can never detect that the user has moved to a different repo. Compare against the currently selected repo instead.",
+    "App.js is still 817 lines (> 700-line guideline); splitting TopBar/AppSidebar/QueryPage/NodePage out would also isolate this tree-loading state machine into one testable place."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (2/2 spot checks)", "frontend": "75% (3/4: 3 regressions pass, primary race still fails 2/3 runs)"},
+  "seed_data_creation": "None. Reused the persisted synth/webframework tree (52 nodes). No indexing run, one real /api/query (LLM) call made.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Bearer codememory-dev-token-xzcU5a772sHS7PMx8LkLN7Iyj003MDVa (valid). /app/memory/test_credentials.md still shows the removed POST /api/poc example in one place — cosmetic.",
+  "context_for_next_testing_agent": "Repro recipe for the race (no waits > 300ms between reload and click): goto REACT_APP_BACKEND_URL, localStorage.setItem('codememory_token', TOKEN), reload(domcontentloaded), wait_for_selector repo-owner-input, fill synth/webframework, click load-tree-btn, wait 5-6s, then assert count of [data-node-type='subsystem'] >= 3 and [data-testid='tree-empty'] == 0. It is timing dependent (2/3 hit rate) so run the attempt at least 3 times in a loop. Attach page.on('requestfinished') and print /api/tree + /api/index/status URLs — the failing signature is the pallets/itsdangerous tree request finishing AFTER the synth one. Workaround for other tests: wait 8s after reload before clicking load-tree-btn (regressions 1-3 were verified this way and all pass).",
+  "rca_of_the_issue": "The applied fix assumed the stale DEFAULT_REPO request always starts before the user's request. It does not: the mount effect issues loadTree(DEFAULT_REPO) only after awaiting /api/index/status, so when the user clicks load-tree-btn during that await the DEFAULT_REPO call receives the newest request id and its {exists:false} response is accepted as authoritative, clobbering the valid synth/webframework tree. Request-id recency is the wrong invariant here; the invariant must be 'response repo == currently selected repo' (and the mount-time default load must be skipped once the user has chosen a repo)."
+}

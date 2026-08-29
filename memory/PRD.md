@@ -12,9 +12,24 @@ Storage:
 - **Mongo is intentionally NOT used** for domain data.
 
 ## Phase plan
-- **Phase 0 — Risk POC (complete, 2026-02).**
-- **Phase 1 — Ingestion + RAPTOR tree (complete, 2026-02).**
-- **Phase 2 — Retrieval + `/api/query` (complete, 2026-02).**
+- **Phase 0 — Risk POC (complete).**
+- **Phase 1 — Ingestion + RAPTOR tree (complete).**
+- **Phase 2 — Retrieval + `/api/query` (complete).**
+- **Phase 3 — Web UI completion (complete).**
+- **Phase 4 — Chrome + VS Code extensions (complete).**
+- **Phase 5 — Stress + polish (complete, 2026-02):** 11/11 stress scenarios
+  green against the live backend (real gpt-5 / MiniLM / Chroma) plus an
+  independent testing_agent pass that surfaced and fixed one HIGH-priority
+  frontend race (loadTree stale-response clobber). Final state: **7/7 race
+  runs pass, 3/3 UI regressions pass, 25/25 backend pytest pass, 2/2 backend
+  spot checks pass, 0 critical / 0 integration issues open.** Full report:
+  **`/app/memory/stress_report.md`**.
+
+## Project status: COMPLETE
+All acceptance criteria for Phases 0-5 met. Backend, web app, Chrome
+extension, and VS Code extension are all built, tested, and packaged.
+Deferred polish items are enumerated in the stress report; none are
+blocking.
 - **Phase 3 — Web UI completion (complete, 2026-02).**
 - **Phase 4 — Chrome + VS Code extensions (complete, 2026-02):**
   - `/app/extensions/chrome/` — MV3, vanilla JS. Popup (query + budget + answer/stats/paths), context menu ("Ask CodeMemory about this" on selection → pre-fills popup), options page (backend URL + token + `test connection` + runtime host-permission grant). `host_permissions` restricted to the preview URL; `optional_host_permissions` for other origins granted at runtime via `chrome.permissions.request`. Packaged: **/app/extensions/codememory-chrome.zip** (14 files).

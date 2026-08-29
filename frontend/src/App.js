@@ -640,21 +640,38 @@ function App() {
     return () => { cancelled = true; };
   }, [token]);
 
-  // ---- tree loader ----
+  // ---- tree loader with staleness guards ------------------------------------
+  //   - monotonic request-id: only the most recent loadTree() sets state
+  //   - currentRepoRef: drop any response whose (owner,name) no longer matches
+  //     the repo the user is currently viewing (order-independent guarantee)
+  const treeReqIdRef = useRef(0);
+  const currentRepoRef = useRef({ owner: DEFAULT_REPO.owner, name: DEFAULT_REPO.name });
+  const userHasSelectedRepoRef = useRef(false);
+
   const loadTree = useCallback(async (owner, name) => {
     if (!token) return;
+    const myReqId = ++treeReqIdRef.current;
     setTreeLoading(true); setTreeError(null);
     try {
       const t = await apiFetch(
         `/tree?owner=${encodeURIComponent(owner)}&name=${encodeURIComponent(name)}`,
         { token, timeout: 12000 }
       );
+      // Drop if a newer loadTree() has been queued since we started.
+      if (myReqId !== treeReqIdRef.current) return;
+      // Drop if this response is for a repo the user is no longer viewing —
+      // the reliable invariant (order-independent).
+      const cur = currentRepoRef.current;
+      if (cur && (owner !== cur.owner || name !== cur.name)) return;
       setTree(t);
     } catch (e) {
+      if (myReqId !== treeReqIdRef.current) return;
+      const cur = currentRepoRef.current;
+      if (cur && (owner !== cur.owner || name !== cur.name)) return;
       setTree({ exists: false, nodes: {}, root_id: null });
       setTreeError(e.status === 401 ? "invalid bearer token" : e.message);
     } finally {
-      setTreeLoading(false);
+      if (myReqId === treeReqIdRef.current) setTreeLoading(false);
     }
   }, [token]);
 
@@ -665,14 +682,19 @@ function App() {
       try {
         const s = await apiFetch("/index/status", { token, timeout: 8000 });
         setStatus(s);
+        // If the user has already selected a repo during the await above,
+        // skip the mount-time default load — their selection wins.
+        if (userHasSelectedRepoRef.current) return;
         if (s.repo) {
           const [o, n] = s.repo.split("/");
           if (o && n) {
+            currentRepoRef.current = { owner: o, name: n };
             setCurrentRepo((prev) => ({ ...prev, owner: o, name: n }));
             loadTree(o, n);
             return;
           }
         }
+        currentRepoRef.current = { owner: currentRepo.owner, name: currentRepo.name };
         loadTree(currentRepo.owner, currentRepo.name);
       } catch {
         /* auth probe surfaces */
@@ -705,18 +727,24 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status.status, token, currentRepo.owner, currentRepo.name]);
 
-  const onStarted = useCallback((s, repo) => {
-    setStatus(s);
-    setCurrentRepo((prev) => ({ ...prev, ...repo }));
-    setSelected(null);
-    setTree({ exists: false, nodes: {}, root_id: null });
-  }, []);
-
   const onLoadExisting = useCallback(async (o, n) => {
+    // Synchronously mark the user selection so any in-flight mount-default
+    // loadTree responses are dropped when they resolve.
+    userHasSelectedRepoRef.current = true;
+    currentRepoRef.current = { owner: o, name: n };
     setCurrentRepo((prev) => ({ ...prev, owner: o, name: n }));
     setSelected(null);
     await loadTree(o, n);
   }, [loadTree]);
+
+  const onStarted = useCallback((s, repo) => {
+    setStatus(s);
+    userHasSelectedRepoRef.current = true;
+    currentRepoRef.current = { owner: repo.owner, name: repo.name };
+    setCurrentRepo((prev) => ({ ...prev, ...repo }));
+    setSelected(null);
+    setTree({ exists: false, nodes: {}, root_id: null });
+  }, []);
 
   const handleTreeSelect = useCallback((id) => {
     setSelected(id);

@@ -1,0 +1,52 @@
+{
+  "summary": "Phase-5 sign-off pass. Rewrote /app/backend/tests/backend_test.py for the current API surface (the old suite still targeted the removed /api/poc) and ran it against the LIVE public URL with real gpt-5/MiniLM/Chroma — 25/25 passed. Independently re-confirmed every HTTP-reachable phase-5 claim: budget=0 -> 200 token_count=0 nodes_used=[] answer contains 'too small'; budget=50 -> 200 non-empty answer, no crash; prompt-injection honeypot (Issue #201) -> gpt-5 answered about dual-key HMAC rotation citing PR #101/#102/Issue #201, never emitted 'PWNED'; 5 parallel /api/query (budget 15000) -> 5/5 HTTP 200 with token_count>0 and non-empty answers, tree still exists=true with 52 nodes afterwards; un-indexed repo contract -> 200 with token_count=0, nodes_used=[], naive_baseline_tokens=0, answer starting 'No repository indexed yet'. Auth surface verified: /api/health public, and /api/query /api/index /api/index/status /api/tree all return 401 (detail='Invalid or missing bearer token') with no token, a wrong token, and a wrong scheme. /api/openapi.json is public and contains EXACTLY the 5 expected paths with no /api/poc. Frontend: all requested Phase-3 UI states pass (no-token banner + auto-opened settings panel, wrong-token -> data-auth-state='bad' + banner-auth-error, valid token -> 'token: ok', tree renders 3 subsystem + 6 topic badges, subsystem click -> detail tab + node-title, artifact click -> node-meta-strip). Phase-4 query flow through the UI also works (10458 tokens packed / 15630 baseline / 33% saved / 20 paths, no injection leak). ONE real frontend bug found: a tree-fetch race that leaves the app claiming the repo is not indexed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/query", "issue": "retriever._pick_repo() silently falls back to the most-recently-modified tree file when repo_owner/repo_name are omitted. A client that forgets the repo fields gets an answer about an unrelated repo instead of a 400 or the 'No repository indexed yet' contract shape. Verified by code read; not user-visible in the current UI, but the extensions could hit it."},
+      {"endpoint": "GET /api/openapi.json, /api/docs, /api/redoc", "issue": "Still publicly exposed with no auth (carried over from iteration 1). Acceptable for a POC; gate before any public deploy."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Load existing tree immediately after page load -> Query tab",
+        "issue": "RACE: on mount App.js runs the effect at App.js:662 which calls loadTree(DEFAULT_REPO = pallets/itsdangerous) after fetching /index/status (and React StrictMode fires it twice — observed 2 requests for pallets/itsdangerous). If the user clicks load-tree-btn for another repo within ~5s of load, the user's GET /api/tree?owner=synth&name=webframework resolves FIRST and the stale DEFAULT_REPO response resolves SECOND and clobbers state with {exists:false,nodes:{},root_id:null}. loadTree() has no cancellation/staleness guard and does not check that (owner,name) still match currentRepo. Result: sidebar-repo still reads 'synth/webframework' but tree-empty ('no tree for this repo yet') is rendered, and the Query tab hard-blocks with query-error {\"status\":\"not-indexed\",\"msg\":\"no tree for this repo — index one first (Home tab)\"} even though the tree exists server-side (verified /api/tree returns 52 nodes at that moment). Reproduced deterministically; clicking load-tree-btn again after ~8s recovers.",
+        "affected_selectors": ["load-tree-btn", "tree-empty", "sidebar-repo", "query-error", "run-query-btn"]
+      }
+    ],
+    "design_issues": [
+      {"screen": "Home / Detail / Query (1920x1080)", "issues": ["Large empty vertical band between content and the footer — footer is not pinned and floats mid-page when panels are short (also flagged in iteration 1, still unfixed).", "Elapsed-time label next to the ask button (data-testid='query-elapsed', e.g. '20.36s') is very low-contrast grey on near-black.", "The 'ask' button loses its label while loading (renders as an empty pill) instead of showing a spinner or 'asking…' text.", "Tree row titles are truncated with an ellipsis and have no title/tooltip attribute, so long subsystem/topic names are unreadable in the 260px sidebar."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "FIX (HIGH): add a staleness guard to loadTree in /app/frontend/src/App.js — capture a request id / AbortController and drop the response if (owner,name) no longer match the latest requested repo; also skip the mount-time DEFAULT_REPO loadTree once the user has explicitly chosen a repo. Today a click within ~5s of page load makes the app falsely report 'no tree for this repo yet' and blocks the whole Query tab.",
+    "Consider making POST /api/query require repo_owner/repo_name (or return the 'No repository indexed yet' shape) instead of _pick_repo()'s most-recent-tree-file fallback.",
+    "Polish: pin the footer, raise contrast on query-elapsed, keep a label/spinner on the loading ask button, add title attributes to truncated tree row titles."
+  ],
+  "critical_code_review_comments": [
+    "frontend/src/App.js:644-659 loadTree() — no request cancellation and no owner/name check before setTree(); last-response-wins causes the confirmed not-indexed false negative. This is the only functional defect found in this pass.",
+    "frontend/src/App.js is 809 lines — over the 700-line guideline. Split TopBar/AppSidebar/QueryPage/NodePage into components/.",
+    "backend/retriever.py:141-156 _pick_repo() imports json inside the loop and reads an arbitrary tree file when owner/name are missing; move the import to module scope and make the fallback explicit.",
+    "Injection hardening looks sound: QA_PROMPT tells the model to treat context as reference data only and the context is wrapped in explicit DATA delimiters; verified live that the Issue #201 honeypot does not leak 'PWNED'.",
+    "Auth is correct and timing-safe (secrets.compare_digest) and every protected route is covered by require_bearer — verified 401 on all four routes for missing/wrong/bad-scheme credentials.",
+    "GET /api/tree responses carry no Mongo _id and node ids are self-consistent (node['id'] == map key) across all 52 nodes."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py"
+  ],
+  "success_rate": {"backend": "100% (25/25)", "frontend": "88% (7/8 checks; tree-load race fails)"},
+  "seed_data_creation": "None created. Reused the persisted synth/webframework tree (52 nodes: 25 chunk / 17 artifact / 6 topic / 3 subsystem / 1 repo) and its Chroma collection. No indexing job was started, so no state was mutated.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Bearer token from /app/memory/test_credentials.md: codememory-dev-token-xzcU5a772sHS7PMx8LkLN7Iyj003MDVa (valid). NOTE: that file's example curl still references the removed POST /api/poc endpoint — update it.",
+  "context_for_next_testing_agent": "backend_test.py was fully rewritten for the phase-1..5 surface (the old /api/poc suite was dead code). Classes: TestHealth, TestAuthSurface (parametrized over the 4 protected routes x no-token/wrong-token), TestOpenApi (exact 5-path set), TestTree (session-scoped synth_tree fixture, no LLM cost), TestBudgetEdges, TestPromptInjection, TestConcurrency (5 parallel queries via ThreadPoolExecutor, class-scoped fixture), TestNoRepoContract. Run: `cd /app/backend && python -m pytest tests/backend_test.py -q --junitxml=/app/test_reports/pytest/pytest_results.xml` (~32s wall; pytest.ini pins -n 2 --dist loadscope so the LLM-heavy classes run on separate workers). Real /api/query latency was 6-22s per call, so 120s timeouts are plenty. manual_checks.py still references /api/poc and is stale. For UI tests: seed the token with localStorage.setItem('codememory_token', TOKEN) then reload, and WAIT ~8s after load before clicking load-tree-btn until the loadTree race is fixed, otherwise the tree will spuriously render tree-empty.",
+  "rca_of_the_issue": "Frontend not-indexed false negative: App.js mount effect (line 662) unconditionally calls loadTree(DEFAULT_REPO='pallets/itsdangerous') after the /index/status probe, and React StrictMode double-invokes it. loadTree (line 644) has no AbortController and no guard comparing the resolved response's repo against the currently selected repo, so whichever GET /api/tree resolves last wins. Observed network order: synth/webframework (user click) resolved first, pallets/itsdangerous (mount, x2) resolved after and set tree={exists:false}. currentRepo stays synth/webframework, so the UI shows 'synth/webframework' in sidebar-repo alongside 'no tree for this repo yet', and QueryPage's `if (!treeExists)` guard (App.js:379) short-circuits the ask button with a not-indexed error. Backend is innocent — /api/tree returned exists=true with 52 nodes throughout. Fix: tag each loadTree call with a monotonically increasing request id (or AbortController) and ignore stale resolutions; additionally skip the DEFAULT_REPO mount load once a user-selected repo exists."
+}

@@ -38,11 +38,13 @@ def api_client():
 
 
 @pytest.fixture(scope="session")
-def poc_result(api_client, bearer_token):
-    """Run POST /api/poc once per session (real gpt-5 call, ~15-25s) and share."""
-    r = api_client.post(
-        f"{BASE_URL}/api/poc",
+def synth_tree(bearer_token):
+    """Persisted synth/webframework tree via GET /api/tree (no LLM cost)."""
+    r = requests.get(
+        f"{BASE_URL}/api/tree",
+        params={"owner": "synth", "name": "webframework"},
         headers={"Authorization": f"Bearer {bearer_token}"},
-        timeout=180,
+        timeout=60,
     )
-    return r
+    assert r.status_code == 200, f"GET /api/tree -> {r.status_code}: {r.text[:300]}"
+    return r.json()

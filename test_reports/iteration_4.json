@@ -1,0 +1,19 @@
+{
+  "summary": "Re-verified the loadTree race fix (attempt 2) in /app/frontend/src/App.js. RESULT: FIXED. Ran the exact repro recipe 7 times total (4 exploratory + 3 final, each a fresh navigate + localStorage token seed + reload + immediate fill synth/webframework + click load-tree-btn, no waits > 300ms, then 6s observation). All 7 runs: subsystems=3, tree-empty=0, sidebar-repo='synth/webframework'; on the final 3 runs run-query-btn was present and NOT disabled after switching to the query tab. Network traces confirm the previously-fatal ordering (pallets/itsdangerous tree finishing AFTER the synth tree) occurred in 3 of the 4 exploratory runs and the UI still kept the user's selection — the currentRepoRef + userHasSelectedRepoRef guards handle it order-independently. All 3 regressions PASS. Backend spot checks PASS and the full existing suite (25 tests) passes.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "App.js is 837 lines (> 700 guideline). The tree-loading state machine (loadTree + mount effect + polling effect + onLoadExisting/onStarted) is now correct but should be extracted into a useRepoTree() hook so this invariant is unit-testable and cannot regress a third time.",
+    "Polling effect (App.js:713-718) calls loadTree(currentRepo.owner, currentRepo.name) from React state while the guards key off currentRepoRef; they are kept in sync today but a future edit that updates only state would silently reintroduce the mismatch. Prefer reading currentRepoRef.current inside the poll callback."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (25/25 pytest + 2/2 spot checks)", "frontend": "100% (7/7 race runs, 3/3 regressions)"},
+  "seed_data_creation": "None. Reused persisted synth/webframework tree (52 nodes). One real /api/query LLM call made.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Bearer codememory-dev-token-xzcU5a772sHS7PMx8LkLN7Iyj003MDVa (valid)",
+  "context_for_next_testing_agent": "Race is fixed and verified 7/7. NOTE for future scripts: [data-testid='run-query-btn'] only exists on the query tab, so click [data-testid='tab-query'] before asserting on it (asserting it on the home tab yields count=0 and a false failure). Backend spot values: GET /api/tree?owner=synth&name=webframework -> exists=true, 52 nodes, root node:repo:ece62f0d7e; POST /api/query token_budget=0 -> 200, token_count=0, baseline 15630. Query flow reference: 10962 packed / 15630 baseline / 30% saved, ~3.3k-char answer, no injection leak. Deferred polish items (footer position/mid-page whitespace, elapsed contrast, ask button label, tree row tooltips, _pick_repo fallback, App.js split) remain unaddressed by design.",
+  "rca_of_the_issue": "Previous failure: the mount effect awaited /api/index/status before calling loadTree(DEFAULT_REPO), so the stale default request got the HIGHER monotonic request id and its {exists:false} response clobbered the user's tree. The new fix (a) skips the mount-time DEFAULT_REPO load when userHasSelectedRepoRef.current is true and (b) drops any /tree response whose (owner,name) != currentRepoRef.current, which is updated synchronously on click. Both invariants are order-independent, confirmed against the failing network ordering."
+}
