@@ -1,11 +1,10 @@
-"""CodeMemory backend — Phase 0 POC.
+"""CodeMemory backend — Phase 1.
 
-Endpoints:
-    GET  /api/health         → {"status":"ok"} (no auth)
-    POST /api/poc            → runs the full risk chain (bearer-protected)
-
-Auth: shared-secret bearer token from env CODEMEMORY_API_TOKEN.
-CORS: allows the frontend origin AND any chrome-extension://* origin.
+Endpoints (all under /api):
+    GET  /health              → {"status":"ok"} (no auth)
+    POST /index               → schedule background ingestion+tree build (bearer)
+    GET  /index/status        → current job status (bearer)
+    GET  /tree?owner=&name=   → full tree (flat node map + root id) (bearer)
 """
 from __future__ import annotations
 
@@ -14,18 +13,16 @@ import logging
 import os
 import secrets
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-import httpx
-import tiktoken
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 
-from github_client import fetch_files_in_dir, recent_merged_prs
-from llm import LLMError, call_llm
+import tree_store
+from index_manager import manager, wire_singletons
+from models import IndexRequest, IndexStatus, TreeNode, TreeResponse
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -37,11 +34,10 @@ logging.basicConfig(
 logger = logging.getLogger("codememory")
 
 # --------------------------------------------------------------------------- #
-# Lazy singletons — model + chroma client are heavy, load on first use.
+# Heavy singletons (lazy)
 # --------------------------------------------------------------------------- #
 _embedder = None
 _chroma_client = None
-_chroma_lock = asyncio.Lock()
 
 
 def _get_embedder():
@@ -97,13 +93,13 @@ def require_bearer(
 # --------------------------------------------------------------------------- #
 app = FastAPI(
     title="CodeMemory",
-    version="0.1.0-phase0",
+    version="0.2.0-phase1",
     openapi_url="/api/openapi.json",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
+    description="Hierarchical, token-aware memory over a GitHub repo.",
 )
 
-# CORS: exact frontend origin + any chrome-extension://<id> origin.
 _frontend_origin = os.environ.get("FRONTEND_ORIGIN", "")
 _allow_origins = [o for o in [_frontend_origin] if o]
 app.add_middleware(
@@ -118,6 +114,15 @@ app.add_middleware(
 api = APIRouter(prefix="/api")
 
 
+@app.on_event("startup")
+async def _startup() -> None:
+    # Preload embedder + chroma so the first /index call isn't cold.
+    await asyncio.to_thread(_get_embedder)
+    await asyncio.to_thread(_get_chroma)
+    wire_singletons(_embedder, _chroma_client)
+    logger.info("codememory ready.")
+
+
 # --------------------------------------------------------------------------- #
 # Health
 # --------------------------------------------------------------------------- #
@@ -127,151 +132,66 @@ async def health() -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# POC — proves the whole risky chain end-to-end.
+# Index
 # --------------------------------------------------------------------------- #
-class PocResponse(BaseModel):
-    chunks_fetched: int
-    embeddings_stored: int
-    clusters: int
-    sample_summary: str
-    summary_token_count: int
-    chroma_persisted: bool
+@api.post("/index", response_model=IndexStatus, status_code=202)
+async def index(
+    body: IndexRequest, _token: str = Depends(require_bearer)
+) -> IndexStatus:
+    """Kick off ingestion + tree build in the background. Returns immediately.
 
+    Returns 202 with the fresh status, or 409 if another index job is running.
+    """
+    if not body.repo_owner.strip() or not body.repo_name.strip():
+        raise HTTPException(status_code=400, detail="repo_owner and repo_name are required")
 
-SUMMARY_PROMPT_TEMPLATE = (
-    "You are an expert software engineer and technical writer. Summarize this "
-    "cluster of related code/PR chunks into a concise, high-level summary "
-    "(max {max_tokens} tokens) that captures its main purpose, key design "
-    "decisions/trade-offs, and any clearly represented PRs. Use structured "
-    "bullet points. Skip line-by-line code detail — focus on the story of "
-    "what this cluster does, why it exists, and how it evolved. "
-    "Chunks: {cluster_text}"
-)
-
-
-def _kmeans_labels(embeddings, k: int) -> List[int]:
-    """Run KMeans with k clamped to min(k, n_samples)."""
-    import numpy as np
-    from sklearn.cluster import KMeans
-
-    n = len(embeddings)
-    k_eff = max(1, min(k, n))
-    km = KMeans(n_clusters=k_eff, n_init=10, random_state=42)
-    arr = np.asarray(embeddings, dtype="float32")
-    labels = km.fit_predict(arr).tolist()
-    return labels
-
-
-@api.post("/poc", response_model=PocResponse)
-async def poc(_token: str = Depends(require_bearer)) -> PocResponse:
-    owner, repo = "pallets", "itsdangerous"
-
-    # 1. Fetch small slice of GitHub data.
     try:
-        prs, files = await asyncio.gather(
-            recent_merged_prs(owner, repo, limit=5),
-            fetch_files_in_dir(owner, repo, "src/itsdangerous", limit=3),
+        return await manager.start(
+            repo_owner=body.repo_owner.strip(),
+            repo_name=body.repo_name.strip(),
+            paths=[p.strip() for p in (body.paths or []) if p.strip()],
+            github_token=body.github_token,
         )
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"GitHub error {e.response.status_code}: {e.response.text[:200]}",
-        ) from e
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"GitHub request failed: {e}") from e
-    logger.info("Fetched %d PRs and %d files", len(prs), len(files))
+    except RuntimeError as e:
+        if str(e) == "indexing_already_in_progress":
+            raise HTTPException(
+                status_code=409,
+                detail="An index job is already running. Poll /api/index/status and retry when idle/complete.",
+            ) from e
+        raise
 
-    # 2. Trivial chunking: one chunk per PR body, one per file.
-    chunks: List[dict] = []
-    for pr in prs:
-        text = f"PR #{pr['number']}: {pr['title']}\n\n{pr['body']}".strip()
-        chunks.append(
-            {
-                "id": f"pr-{pr['number']}",
-                "text": text,
-                "metadata": {
-                    "kind": "pr",
-                    "number": pr["number"],
-                    "title": pr["title"],
-                    "merged_at": pr["merged_at"],
-                    "url": pr.get("html_url") or "",
-                },
-            }
-        )
-    for f in files:
-        text = f"FILE {f['path']}\n\n{f['content']}"
-        chunks.append(
-            {
-                "id": f"file-{f['path']}",
-                "text": text,
-                "metadata": {
-                    "kind": "file",
-                    "path": f["path"],
-                    "name": f["name"],
-                    "size": f["size"],
-                    "url": f.get("html_url") or "",
-                },
-            }
-        )
 
-    if not chunks:
-        raise HTTPException(status_code=502, detail="GitHub returned no PRs or files")
+@api.get("/index/status", response_model=IndexStatus)
+async def index_status(_token: str = Depends(require_bearer)) -> IndexStatus:
+    return manager.get_status()
 
-    # 3. Embed with MiniLM and persist in Chroma.
-    embedder = await asyncio.to_thread(_get_embedder)
-    texts = [c["text"] for c in chunks]
-    embeddings = await asyncio.to_thread(
-        lambda: embedder.encode(texts, normalize_embeddings=True).tolist()
-    )
 
-    async with _chroma_lock:
-        client = _get_chroma()
-        coll = client.get_or_create_collection(name="codememory_poc")
-        # upsert so re-runs are idempotent
-        coll.upsert(
-            ids=[c["id"] for c in chunks],
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=[c["metadata"] for c in chunks],
-        )
-        stored_count = coll.count()
+# --------------------------------------------------------------------------- #
+# Tree
+# --------------------------------------------------------------------------- #
+@api.get("/tree", response_model=TreeResponse)
+async def tree(
+    owner: str = Query(..., description="repo owner"),
+    name: str = Query(..., description="repo name"),
+    _token: str = Depends(require_bearer),
+) -> TreeResponse:
+    """Return the persisted tree for a repo.
 
-        # Verify persistence: reopen the collection via the same client and
-        # confirm the count survives (proxy for on-disk durability).
-        verify_coll = client.get_collection(name="codememory_poc")
-        persisted = verify_coll.count() >= len(chunks)
+    Shape: `{root_id, nodes: {id -> TreeNode}, ...}`.
+    Consumers descend via `nodes[id].children`.
+    Returns `exists=false` (with an empty node map) if this repo has never been indexed.
+    """
+    data = tree_store.load(owner, name)
+    if not data:
+        return TreeResponse(repo_owner=owner, repo_name=name, exists=False)
 
-    # 4. KMeans k=2 (clamped).
-    labels = await asyncio.to_thread(_kmeans_labels, embeddings, 2)
-    unique_clusters = sorted(set(labels))
-    logger.info("Clusters produced: %s", unique_clusters)
-
-    # 5. Summarize ONE cluster with gpt-5.
-    target_cluster = unique_clusters[0]
-    cluster_chunks = [chunks[i]["text"] for i, lb in enumerate(labels) if lb == target_cluster]
-    # cap raw input size to keep the call fast/cheap
-    cluster_text = "\n\n---\n\n".join(cluster_chunks)[:12000]
-
-    prompt = SUMMARY_PROMPT_TEMPLATE.format(max_tokens=300, cluster_text=cluster_text)
-    try:
-        summary = await call_llm(prompt)
-    except LLMError as e:
-        raise HTTPException(status_code=502, detail=f"LLM failed: {e}") from e
-
-    # 6. Count tokens with tiktoken.
-    try:
-        enc = tiktoken.encoding_for_model("gpt-4o")  # gpt-5 not in tiktoken registry; use o200k_base equivalent
-    except Exception:
-        enc = tiktoken.get_encoding("o200k_base")
-    summary_tokens = len(enc.encode(summary))
-
-    return PocResponse(
-        chunks_fetched=len(chunks),
-        embeddings_stored=stored_count,
-        clusters=len(unique_clusters),
-        sample_summary=summary,
-        summary_token_count=summary_tokens,
-        chroma_persisted=bool(persisted),
+    nodes = {nid: TreeNode(**n) for nid, n in (data.get("nodes") or {}).items()}
+    return TreeResponse(
+        repo_owner=data.get("repo_owner", owner),
+        repo_name=data.get("repo_name", name),
+        root_id=data.get("root_id"),
+        nodes=nodes,
+        exists=True,
     )
 
 
