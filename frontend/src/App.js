@@ -40,6 +40,76 @@ async function apiFetch(path, { method = "GET", body, token, timeout = 45000 } =
   }
 }
 
+// -------------------- bulletproof download helper -------------------- //
+// Blob-based programmatic download. Works regardless of:
+//   - cross-origin href (the `download` attr is ignored cross-origin in Chrome)
+//   - Content-Disposition (inline vs attachment)
+//   - parent handlers calling preventDefault (modals, routers)
+async function downloadFile(url, filename, { timeout = 30000 } = {}) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeout);
+  try {
+    const r = await fetch(url, { signal: controller.signal, credentials: "omit" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const blob = await r.blob();
+    // eslint-disable-next-line no-console
+    console.log("[downloadFile]", filename, "bytes=", blob.size, "type=", blob.type);
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename;
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    // Give the browser a tick to consume the click before we revoke.
+    setTimeout(() => {
+      URL.revokeObjectURL(objUrl);
+      a.remove();
+    }, 250);
+    return blob.size;
+  } finally { clearTimeout(t); }
+}
+
+function DownloadButton({ url, filename, testid, children, className = "cm-btn" }) {
+  const [state, setState] = useState("idle"); // idle | busy | err
+  const [err, setErr] = useState(null);
+  const onClick = useCallback(async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setState("busy"); setErr(null);
+    try {
+      const size = await downloadFile(url, filename);
+      setState("idle");
+      // brief visible confirmation via title attr for a couple seconds
+      // eslint-disable-next-line no-console
+      console.log("[downloaded]", filename, size, "bytes");
+    } catch (ex) {
+      setState("err"); setErr(ex.message || String(ex));
+      setTimeout(() => setState("idle"), 4000);
+    }
+  }, [url, filename]);
+  return (
+    <>
+      <button
+        type="button"
+        className={className + (state === "busy" ? " is-busy" : "")}
+        onClick={onClick}
+        disabled={state === "busy"}
+        data-testid={testid}
+        data-download-state={state}
+      >
+        {state === "busy" ? "downloading…" : state === "err" ? "retry download" : children}
+      </button>
+      {state === "err" && err && (
+        <span className="cm-err-inline" data-testid={testid + "-error"}>
+          download failed: {err}
+        </span>
+      )}
+    </>
+  );
+}
+
 // -------------------- tiny markdown renderer (guide only) -------------------- //
 function renderMarkdown(md) {
   const lines = (md || "").split("\n");
@@ -120,14 +190,14 @@ function GuideModal({ onClose }) {
         <div className="cm-modal-head">
           <div className="cm-panel-title" style={{ margin: 0 }}>user guide</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <a
+            <DownloadButton
+              url={`${API}/downloads/guide?dl=1`}
+              filename="CodeMemory-user-guide.md"
+              testid="guide-download-md"
               className="cm-btn cm-btn--ghost"
-              href={`${API}/downloads/guide`}
-              download="CodeMemory-user-guide.md"
-              data-testid="guide-download-md"
             >
               download .md
-            </a>
+            </DownloadButton>
             <button className="cm-btn cm-btn--ghost" onClick={onClose} data-testid="guide-close">close</button>
           </div>
         </div>
@@ -475,30 +545,27 @@ function HomePage({ token, status, tree, onStarted, onLoadExisting }) {
       <section className="cm-panel" data-testid="downloads-panel">
         <div className="cm-panel-title">get the extensions</div>
         <div className="cm-actions" style={{ marginTop: 0 }}>
-          <a
-            className="cm-btn"
-            href={chromeUrl}
-            data-testid="download-chrome-btn"
-            download
+          <DownloadButton
+            url={chromeUrl}
+            filename="codememory-chrome.zip"
+            testid="download-chrome-btn"
           >
             ↓ Chrome extension (.zip)
-          </a>
-          <a
-            className="cm-btn"
-            href={vscodeUrl}
-            data-testid="download-vscode-btn"
-            download
+          </DownloadButton>
+          <DownloadButton
+            url={vscodeUrl}
+            filename="codememory-vscode.vsix"
+            testid="download-vscode-btn"
           >
             ↓ VS Code extension (.vsix)
-          </a>
-          <a
-            className="cm-btn"
-            href={`${API}/downloads/guide`}
-            data-testid="download-guide-md"
-            download="CodeMemory-user-guide.md"
+          </DownloadButton>
+          <DownloadButton
+            url={`${API}/downloads/guide?dl=1`}
+            filename="CodeMemory-user-guide.md"
+            testid="download-guide-md"
           >
             ↓ User guide (.md)
-          </a>
+          </DownloadButton>
           <span className="cm-hint" style={{ margin: 0 }}>
             no auth required · configure the backend URL + your bearer token after install
           </span>

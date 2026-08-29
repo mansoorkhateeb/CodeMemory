@@ -256,19 +256,18 @@ _GUIDE_PATH = Path("/app/USER_GUIDE.md")
 
 
 @api.api_route("/downloads/guide", methods=["GET", "HEAD"])
-async def download_guide() -> FileResponse:
-    """Public download of the plain-language user guide (markdown).
-
-    Also fetched by the in-app 'Guide' viewer over CORS.
-    """
+async def download_guide(dl: int = 0) -> FileResponse:
+    """Public user guide. Default `inline` for the in-app viewer;
+    call with `?dl=1` to force a download disposition."""
     if not _GUIDE_PATH.exists():
         raise HTTPException(status_code=404, detail="USER_GUIDE.md not found")
+    disp = "attachment" if dl else "inline"
     return FileResponse(
         path=str(_GUIDE_PATH),
         media_type="text/markdown; charset=utf-8",
         filename="CodeMemory-user-guide.md",
         headers={
-            "Content-Disposition": 'inline; filename="CodeMemory-user-guide.md"',
+            "Content-Disposition": f'{disp}; filename="CodeMemory-user-guide.md"',
             "Cache-Control": "public, max-age=60",
         },
     )
