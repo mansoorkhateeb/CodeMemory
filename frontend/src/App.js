@@ -3,42 +3,48 @@ import "@/App.css";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
-
 const DEFAULT_REPO = { owner: "pallets", name: "itsdangerous", paths: "src/itsdangerous" };
 
-// ------------------------- fetch helpers ------------------------- //
-async function apiFetch(path, { method = "GET", body, token } = {}) {
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const r = await fetch(`${API}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await r.text();
-  let parsed;
+// -------------------- fetch helper -------------------- //
+async function apiFetch(path, { method = "GET", body, token, timeout = 45000 } = {}) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeout);
   try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    parsed = { raw: text };
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const r = await fetch(`${API}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    const text = await r.text();
+    let parsed;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = { raw: text }; }
+    if (!r.ok) {
+      const err = new Error((parsed && parsed.detail) || `HTTP ${r.status}`);
+      err.status = r.status;
+      err.body = parsed;
+      throw err;
+    }
+    return parsed;
+  } catch (e) {
+    if (e.name === "AbortError") {
+      const err = new Error("Request timed out");
+      err.status = "timeout";
+      throw err;
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
   }
-  if (!r.ok) {
-    const err = new Error(parsed?.detail || `HTTP ${r.status}`);
-    err.status = r.status;
-    err.body = parsed;
-    throw err;
-  }
-  return parsed;
 }
 
-// ------------------------- top bar ------------------------- //
-function TopBar({ health, onRefreshHealth, token, setToken }) {
+// -------------------- top bar & settings -------------------- //
+function TopBar({ health, onRefreshHealth, authOk, onToggleSettings, settingsOpen }) {
   const dotCls =
-    health.state === "ok"
-      ? "cm-dot cm-dot--ok"
-      : health.state === "checking"
-      ? "cm-dot cm-dot--warn"
-      : "cm-dot cm-dot--err";
+    health.state === "ok" ? "cm-dot cm-dot--ok" :
+    health.state === "checking" ? "cm-dot cm-dot--warn" : "cm-dot cm-dot--err";
   return (
     <header className="cm-header" data-testid="app-header">
       <div className="cm-brand">
@@ -47,203 +53,79 @@ function TopBar({ health, onRefreshHealth, token, setToken }) {
           <h1 className="cm-title" data-testid="app-title">CodeMemory</h1>
           <p className="cm-subtitle">
             hierarchical token-aware memory over a github repo &nbsp;·&nbsp;
-            <span className="cm-tag">phase 1 · ingest + raptor tree</span>
+            <span className="cm-tag">phase 3 · web ui</span>
           </p>
         </div>
       </div>
       <div className="cm-header-right">
-        <input
-          className="cm-input cm-input--slim"
-          type="password"
-          placeholder="bearer token"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          data-testid="token-input"
-          spellCheck={false}
-          autoComplete="off"
-        />
         <div className="cm-health" data-testid="health-indicator">
           <span className={dotCls} />
           <span className="cm-health-label">api: {health.state}</span>
-          <button
-            className="cm-btn cm-btn--ghost"
-            onClick={onRefreshHealth}
-            data-testid="refresh-health-btn"
-          >
+          <button className="cm-btn cm-btn--ghost" onClick={onRefreshHealth} data-testid="refresh-health-btn">
             refresh
           </button>
         </div>
+        <div className={"cm-auth-chip" + (authOk === false ? " is-bad" : authOk ? " is-ok" : "")}
+             data-testid="auth-chip"
+             data-auth-state={authOk === false ? "bad" : authOk === true ? "ok" : "unknown"}>
+          <span className="cm-dot"
+                style={{
+                  background: authOk === false ? "var(--cm-err)" : authOk ? "var(--cm-ok)" : "var(--cm-fg-muted)",
+                  color: "inherit",
+                }} />
+          <span>{authOk === false ? "token: invalid" : authOk ? "token: ok" : "token: unknown"}</span>
+        </div>
+        <button
+          className={"cm-btn cm-btn--ghost" + (settingsOpen ? " is-active" : "")}
+          onClick={onToggleSettings}
+          data-testid="settings-toggle"
+          aria-expanded={settingsOpen}
+        >
+          settings
+        </button>
       </div>
     </header>
   );
 }
 
-// ------------------------- repo form ------------------------- //
-function RepoForm({ token, onStarted, onLoadExisting, disabled }) {
-  const [owner, setOwner] = useState(DEFAULT_REPO.owner);
-  const [name, setName] = useState(DEFAULT_REPO.name);
-  const [paths, setPaths] = useState(DEFAULT_REPO.paths);
-  const [ghToken, setGhToken] = useState("");
-  const [err, setErr] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const submit = useCallback(async () => {
-    setErr(null);
-    setBusy(true);
-    try {
-      const body = {
-        repo_owner: owner.trim(),
-        repo_name: name.trim(),
-        paths: paths.split(",").map((p) => p.trim()).filter(Boolean),
-        github_token: ghToken.trim() || null,
-      };
-      const status = await apiFetch("/index", { method: "POST", body, token });
-      onStarted(status, { owner: body.repo_owner, name: body.repo_name });
-    } catch (e) {
-      setErr(e.message + (e.status === 409 ? " (409)" : ""));
-    } finally {
-      setBusy(false);
-    }
-  }, [owner, name, paths, ghToken, token, onStarted]);
-
-  const loadExisting = useCallback(async () => {
-    setErr(null);
-    setLoading(true);
-    try {
-      await onLoadExisting(owner.trim(), name.trim());
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [owner, name, onLoadExisting]);
-
+function SettingsPanel({ token, setToken, onClose }) {
+  const [local, setLocal] = useState(token);
+  useEffect(() => { setLocal(token); }, [token]);
   return (
-    <section className="cm-panel" data-testid="repo-form">
-      <div className="cm-panel-title">repo</div>
-      <div className="cm-form-grid">
-        <div>
-          <label className="cm-label" htmlFor="cm-owner">owner</label>
-          <input
-            id="cm-owner"
-            data-testid="repo-owner-input"
-            className="cm-input"
-            value={owner}
-            onChange={(e) => setOwner(e.target.value)}
-            spellCheck={false}
-          />
-        </div>
-        <div>
-          <label className="cm-label" htmlFor="cm-name">repo</label>
-          <input
-            id="cm-name"
-            data-testid="repo-name-input"
-            className="cm-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            spellCheck={false}
-          />
-        </div>
-        <div className="cm-form-wide">
-          <label className="cm-label" htmlFor="cm-paths">paths (comma-separated)</label>
-          <input
-            id="cm-paths"
-            data-testid="repo-paths-input"
-            className="cm-input"
-            value={paths}
-            placeholder="src/itsdangerous, docs"
-            onChange={(e) => setPaths(e.target.value)}
-            spellCheck={false}
-          />
-        </div>
-        <div className="cm-form-wide">
-          <label className="cm-label" htmlFor="cm-ghtok">github token (optional)</label>
-          <input
-            id="cm-ghtok"
-            data-testid="github-token-input"
-            className="cm-input"
-            type="password"
-            value={ghToken}
-            placeholder="ghp_… (avoids the 60 req/hr limit)"
-            onChange={(e) => setGhToken(e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </div>
-      </div>
-      <div className="cm-actions">
+    <div className="cm-settings" data-testid="settings-panel">
+      <div className="cm-panel-title">settings</div>
+      <label className="cm-label" htmlFor="cm-token">api bearer token</label>
+      <div className="cm-settings-row">
+        <input
+          id="cm-token"
+          className="cm-input"
+          type="password"
+          value={local}
+          placeholder="CODEMEMORY_API_TOKEN"
+          onChange={(e) => setLocal(e.target.value)}
+          data-testid="token-input"
+          spellCheck={false}
+          autoComplete="off"
+        />
         <button
           className="cm-btn cm-btn--primary"
-          onClick={submit}
-          disabled={busy || disabled || !token}
-          data-testid="start-index-btn"
+          onClick={() => { setToken(local); onClose(); }}
+          data-testid="save-token-btn"
         >
-          {busy ? "starting…" : disabled ? "indexing…" : "index this repo"}
+          save
         </button>
-        <button
-          className="cm-btn"
-          onClick={loadExisting}
-          disabled={loading || !token}
-          data-testid="load-tree-btn"
-        >
-          {loading ? "loading…" : "load existing tree"}
-        </button>
-        {err && (
-          <span className="cm-err-inline" data-testid="repo-form-error">
-            {err}
-          </span>
-        )}
       </div>
-    </section>
+      <p className="cm-hint">stored in localStorage · required for every non-/health endpoint</p>
+    </div>
   );
 }
 
-// ------------------------- status panel ------------------------- //
-const STATUS_COLORS = {
-  idle: "cm-dot--muted",
-  indexing: "cm-dot--warn",
-  complete: "cm-dot--ok",
-  failed: "cm-dot--err",
-};
-
-function StatusPanel({ status }) {
-  const dotCls = `cm-dot ${STATUS_COLORS[status.status] || "cm-dot--muted"}`;
-  return (
-    <section className="cm-panel" data-testid="status-panel">
-      <div className="cm-panel-title">status</div>
-      <div className="cm-status-row">
-        <span className={dotCls} />
-        <span className="cm-status-state" data-testid="status-state">
-          {status.status}
-        </span>
-        {status.repo && (
-          <span className="cm-status-repo" data-testid="status-repo">
-            {status.repo}
-          </span>
-        )}
-      </div>
-      <div className="cm-status-stage" data-testid="status-stage">
-        {status.progress?.stage || "—"}
-        {status.progress?.detail ? (
-          <span className="cm-status-detail"> · {status.progress.detail}</span>
-        ) : null}
-      </div>
-      {status.error && (
-        <pre className="cm-pre cm-pre--err cm-status-error" data-testid="status-error">
-          {status.error}
-        </pre>
-      )}
-    </section>
-  );
-}
-
-// ------------------------- tree view ------------------------- //
+// -------------------- tree sidebar -------------------- //
 const TYPE_ORDER = { repo: 0, subsystem: 1, topic: 2, subtopic: 3, artifact: 4, chunk: 5 };
 
 function flattenTree(tree, expanded) {
   const out = [];
-  if (!tree?.root_id || !tree?.nodes) return out;
+  if (!tree || !tree.root_id || !tree.nodes) return out;
   const stack = [{ id: tree.root_id, depth: 0 }];
   while (stack.length) {
     const { id, depth } = stack.pop();
@@ -256,9 +138,7 @@ function flattenTree(tree, expanded) {
         const bt = TYPE_ORDER[tree.nodes[b] && tree.nodes[b].type] ?? 9;
         return at - bt;
       });
-      for (let i = kids.length - 1; i >= 0; i--) {
-        stack.push({ id: kids[i], depth: depth + 1 });
-      }
+      for (let i = kids.length - 1; i >= 0; i--) stack.push({ id: kids[i], depth: depth + 1 });
     }
   }
   return out;
@@ -288,7 +168,7 @@ function TreeRow({ node, depth, isSelected, isOpen, hasChildren, onSelect, onTog
   );
 }
 
-function TreeSidebar({ tree, selected, onSelect }) {
+function AppSidebar({ tree, treeLoading, treeError, selected, onSelect, currentRepo }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const toggle = useCallback((id) => {
     setExpanded((prev) => {
@@ -299,7 +179,7 @@ function TreeSidebar({ tree, selected, onSelect }) {
   }, []);
 
   useEffect(() => {
-    if (!tree?.root_id) return;
+    if (!tree || !tree.root_id) return;
     const initial = new Set([tree.root_id]);
     const root = tree.nodes[tree.root_id];
     for (const cid of (root && root.children) || []) initial.add(cid);
@@ -308,22 +188,32 @@ function TreeSidebar({ tree, selected, onSelect }) {
 
   const rows = useMemo(() => flattenTree(tree, expanded), [tree, expanded]);
 
-  if (!tree?.exists || !tree.root_id) {
-    return (
-      <aside className="cm-panel cm-sidebar" data-testid="tree-sidebar">
-        <div className="cm-panel-title">tree</div>
-        <div className="cm-empty" data-testid="tree-empty">
-          no tree yet — run an index above.
-        </div>
-      </aside>
-    );
-  }
-
   return (
-    <aside className="cm-panel cm-sidebar" data-testid="tree-sidebar">
-      <div className="cm-panel-title">tree</div>
+    <aside className="cm-sidebar" data-testid="tree-sidebar">
+      <div className="cm-sidebar-head">
+        <div className="cm-panel-title">tree</div>
+        {currentRepo && (
+          <div className="cm-sidebar-repo" data-testid="sidebar-repo">
+            {currentRepo.owner}/{currentRepo.name}
+          </div>
+        )}
+      </div>
       <div className="cm-tree-scroll">
-        {rows.map(({ node, depth }) => (
+        {treeLoading && (
+          <div className="cm-skeletons" data-testid="tree-loading">
+            <div className="cm-skel" /><div className="cm-skel" /><div className="cm-skel" />
+          </div>
+        )}
+        {!treeLoading && treeError && (
+          <div className="cm-empty cm-empty--err" data-testid="tree-error">{treeError}</div>
+        )}
+        {!treeLoading && !treeError && (!tree || !tree.exists || !tree.root_id) && (
+          <div className="cm-empty" data-testid="tree-empty">
+            no tree for this repo yet.<br />
+            open <b>home</b> and click <em>index this repo</em> or <em>load existing tree</em>.
+          </div>
+        )}
+        {!treeLoading && !treeError && rows.map(({ node, depth }) => (
           <TreeRow
             key={node.id}
             node={node}
@@ -340,55 +230,144 @@ function TreeSidebar({ tree, selected, onSelect }) {
   );
 }
 
-// ------------------------- detail pane ------------------------- //
-function NodeDetail({ tree, nodeId }) {
-  const node = nodeId ? tree?.nodes?.[nodeId] : null;
-  if (!node) {
-    return (
-      <section className="cm-panel cm-detail" data-testid="node-detail">
-        <div className="cm-panel-title">detail</div>
-        <pre className="cm-pre cm-pre--muted" data-testid="detail-empty">
-          {`// select a node in the tree`}
-        </pre>
-      </section>
-    );
-  }
+// -------------------- home / index page -------------------- //
+function RepoForm({ token, disabled, onStarted, onLoadExisting }) {
+  const [owner, setOwner] = useState(DEFAULT_REPO.owner);
+  const [name, setName] = useState(DEFAULT_REPO.name);
+  const [paths, setPaths] = useState(DEFAULT_REPO.paths);
+  const [ghToken, setGhToken] = useState("");
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const submit = useCallback(async () => {
+    setErr(null); setBusy(true);
+    try {
+      const body = {
+        repo_owner: owner.trim(),
+        repo_name: name.trim(),
+        paths: paths.split(",").map((p) => p.trim()).filter(Boolean),
+        github_token: ghToken.trim() || null,
+      };
+      const status = await apiFetch("/index", { method: "POST", body, token, timeout: 15000 });
+      onStarted(status, { owner: body.repo_owner, name: body.repo_name });
+    } catch (e) {
+      setErr(e.message + (e.status === 409 ? " (409)" : e.status === 401 ? " (401)" : ""));
+    } finally { setBusy(false); }
+  }, [owner, name, paths, ghToken, token, onStarted]);
+
+  const loadExisting = useCallback(async () => {
+    setErr(null); setLoading(true);
+    try { await onLoadExisting(owner.trim(), name.trim()); }
+    catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }, [owner, name, onLoadExisting]);
+
   return (
-    <section className="cm-panel cm-detail" data-testid="node-detail">
-      <div className="cm-detail-head">
-        <span className={`cm-tree-badge cm-tree-badge--${node.type}`}>
-          {node.type}
-        </span>
-        <h2 className="cm-detail-title" data-testid="node-title">
-          {node.title || node.id}
-        </h2>
+    <section className="cm-panel" data-testid="repo-form">
+      <div className="cm-panel-title">repo</div>
+      <div className="cm-form-grid">
+        <div>
+          <label className="cm-label" htmlFor="cm-owner">owner</label>
+          <input id="cm-owner" data-testid="repo-owner-input" className="cm-input"
+                 value={owner} onChange={(e) => setOwner(e.target.value)} spellCheck={false} />
+        </div>
+        <div>
+          <label className="cm-label" htmlFor="cm-name">repo</label>
+          <input id="cm-name" data-testid="repo-name-input" className="cm-input"
+                 value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
+        </div>
+        <div className="cm-form-wide">
+          <label className="cm-label" htmlFor="cm-paths">paths (comma-separated)</label>
+          <input id="cm-paths" data-testid="repo-paths-input" className="cm-input"
+                 value={paths} onChange={(e) => setPaths(e.target.value)} spellCheck={false} />
+        </div>
+        <div className="cm-form-wide">
+          <label className="cm-label" htmlFor="cm-ghtok">github token (optional)</label>
+          <input id="cm-ghtok" data-testid="github-token-input" className="cm-input" type="password"
+                 value={ghToken} placeholder="ghp_… (avoids the 60 req/hr limit)"
+                 onChange={(e) => setGhToken(e.target.value)} spellCheck={false} autoComplete="off" />
+        </div>
       </div>
-      {node.summary && (
-        <>
-          <div className="cm-panel-title cm-panel-title--sub">summary</div>
-          <pre className="cm-pre" data-testid="node-summary">{node.summary}</pre>
-        </>
-      )}
-      {node.content && (
-        <>
-          <div className="cm-panel-title cm-panel-title--sub">content</div>
-          <pre className="cm-pre cm-pre--code" data-testid="node-content">
-            {node.content}
-          </pre>
-        </>
-      )}
-      <details className="cm-details">
-        <summary>metadata</summary>
-        <pre className="cm-pre cm-pre--muted" data-testid="node-metadata">
-          {JSON.stringify(node.metadata || {}, null, 2)}
-        </pre>
-      </details>
+      <div className="cm-actions">
+        <button className="cm-btn cm-btn--primary" onClick={submit}
+                disabled={busy || disabled || !token}
+                data-testid="start-index-btn">
+          {busy ? "starting…" : disabled ? "indexing…" : "index this repo"}
+        </button>
+        <button className="cm-btn" onClick={loadExisting}
+                disabled={loading || !token}
+                data-testid="load-tree-btn">
+          {loading ? "loading…" : "load existing tree"}
+        </button>
+        {err && <span className="cm-err-inline" data-testid="repo-form-error">{err}</span>}
+      </div>
     </section>
   );
 }
 
-// ------------------------- query panel ------------------------- //
-function QueryPanel({ token, currentRepo, treeExists }) {
+const STATUS_COLORS = { idle: "cm-dot--muted", indexing: "cm-dot--warn", complete: "cm-dot--ok", failed: "cm-dot--err" };
+
+function StatusPanel({ status }) {
+  const dotCls = "cm-dot " + (STATUS_COLORS[status.status] || "cm-dot--muted");
+  return (
+    <section className="cm-panel" data-testid="status-panel">
+      <div className="cm-panel-title">status</div>
+      <div className="cm-status-row">
+        <span className={dotCls} />
+        <span className="cm-status-state" data-testid="status-state">{status.status}</span>
+        {status.repo && <span className="cm-status-repo" data-testid="status-repo">{status.repo}</span>}
+      </div>
+      <div className="cm-status-stage" data-testid="status-stage">
+        {(status.progress && status.progress.stage) || "—"}
+        {status.progress && status.progress.detail
+          ? <span className="cm-status-detail"> · {status.progress.detail}</span>
+          : null}
+      </div>
+      {status.error && (
+        <pre className="cm-pre cm-pre--err cm-status-error" data-testid="status-error">
+          {status.error}
+        </pre>
+      )}
+    </section>
+  );
+}
+
+function TreeStats({ tree }) {
+  if (!tree || !tree.exists) return null;
+  const counts = {};
+  for (const n of Object.values(tree.nodes)) counts[n.type] = (counts[n.type] || 0) + 1;
+  return (
+    <div className="cm-stats cm-stats--slim" data-testid="tree-stats">
+      {Object.entries(counts).map(([k, v]) => (
+        <div key={k} className="cm-stat" data-testid={`tree-stat-${k}`}>
+          <div className="cm-stat-value">{v}</div>
+          <div className="cm-stat-label">{k}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HomePage({ token, status, tree, onStarted, onLoadExisting }) {
+  return (
+    <div className="cm-view cm-view--home" data-testid="home-view">
+      <div className="cm-home-grid">
+        <RepoForm
+          token={token}
+          disabled={status.status === "indexing"}
+          onStarted={onStarted}
+          onLoadExisting={onLoadExisting}
+        />
+        <StatusPanel status={status} />
+      </div>
+      <TreeStats tree={tree} />
+    </div>
+  );
+}
+
+// -------------------- query page -------------------- //
+function QueryPage({ token, currentRepo, treeExists }) {
   const [q, setQ] = useState("How did session handling evolve and why?");
   const [budget, setBudget] = useState(30000);
   const [busy, setBusy] = useState(false);
@@ -397,129 +376,230 @@ function QueryPanel({ token, currentRepo, treeExists }) {
   const [elapsed, setElapsed] = useState(null);
 
   const run = useCallback(async () => {
+    if (!treeExists) { setErr({ status: "not-indexed", msg: "no tree for this repo — index one first (Home tab)" }); return; }
     setErr(null); setBusy(true); setResult(null); setElapsed(null);
     const t0 = performance.now();
     try {
       const body = {
         query: q,
         token_budget: Number(budget) || 0,
-        repo_owner: currentRepo?.owner,
-        repo_name: currentRepo?.name,
+        repo_owner: currentRepo && currentRepo.owner,
+        repo_name: currentRepo && currentRepo.name,
       };
-      const r = await apiFetch("/query", { method: "POST", body, token });
+      const r = await apiFetch("/query", { method: "POST", body, token, timeout: 90000 });
       setResult(r);
     } catch (e) {
-      setErr({ status: e.status, msg: e.message });
+      let msg = e.message;
+      if (e.status === 401) msg = "invalid or missing bearer token — open settings";
+      if (e.status === 502) msg = "LLM call failed (502) — try again in a moment";
+      if (e.status === "timeout") msg = "request timed out — try a smaller token_budget or retry";
+      setErr({ status: e.status, msg });
     } finally {
       setElapsed(Math.round(performance.now() - t0));
       setBusy(false);
     }
-  }, [q, budget, currentRepo, token]);
+  }, [q, budget, currentRepo, token, treeExists]);
 
   const savings = result && result.naive_baseline_tokens > 0
     ? Math.max(0, Math.round((1 - result.token_count / result.naive_baseline_tokens) * 100))
     : null;
 
   return (
-    <section className="cm-panel cm-query-panel" data-testid="query-panel">
-      <div className="cm-panel-title">query</div>
-      <textarea
-        className="cm-input cm-textarea"
-        rows={3}
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="ask a question about this repo — evolution, why, tradeoffs…"
-        data-testid="query-input"
-        spellCheck={false}
-      />
-      <div className="cm-query-controls">
-        <label className="cm-inline-label">
-          <span className="cm-label">token_budget</span>
-          <input
-            className="cm-input cm-input--narrow"
-            type="number"
-            min={0}
-            step={1000}
-            value={budget}
-            onChange={(e) => setBudget(e.target.value)}
-            data-testid="budget-input"
-          />
-        </label>
-        <button
-          className="cm-btn cm-btn--primary"
-          onClick={run}
-          disabled={busy || !token || !treeExists || !q.trim()}
-          data-testid="run-query-btn"
-        >
-          {busy ? "querying…" : "ask"}
-        </button>
-        {elapsed != null && (
-          <span className="cm-elapsed" data-testid="query-elapsed">
-            {(elapsed / 1000).toFixed(2)}s
-          </span>
-        )}
-        {!treeExists && (
-          <span className="cm-err-inline">index a repo first</span>
-        )}
-      </div>
-
-      {err && (
-        <pre className="cm-pre cm-pre--err" data-testid="query-error">
-          {JSON.stringify(err, null, 2)}
-        </pre>
-      )}
-
-      {result && (
-        <div className="cm-query-result">
-          <div className="cm-stats cm-stats--slim" data-testid="query-stats">
-            <div className="cm-stat">
-              <div className="cm-stat-value" data-testid="stat-token-count">{result.token_count}</div>
-              <div className="cm-stat-label">tokens packed</div>
-            </div>
-            <div className="cm-stat">
-              <div className="cm-stat-value" data-testid="stat-baseline">{result.naive_baseline_tokens}</div>
-              <div className="cm-stat-label">naive baseline</div>
-            </div>
-            <div className="cm-stat">
-              <div className="cm-stat-value" data-testid="stat-savings">
-                {savings == null ? "—" : `${savings}%`}
-              </div>
-              <div className="cm-stat-label">saved vs naive</div>
-            </div>
-            <div className="cm-stat">
-              <div className="cm-stat-value" data-testid="stat-paths">{result.nodes_used.length}</div>
-              <div className="cm-stat-label">node paths cited</div>
-            </div>
-          </div>
-
-          <div className="cm-panel-title cm-panel-title--sub">answer</div>
-          <pre className="cm-pre cm-pre--code" data-testid="query-answer">{result.answer}</pre>
-
-          <details className="cm-details" open>
-            <summary>nodes used ({result.nodes_used.length})</summary>
-            <ul className="cm-paths-list" data-testid="query-paths">
-              {result.nodes_used.map((p, i) => (
-                <li key={i} className="cm-path-item">{p}</li>
-              ))}
-            </ul>
-          </details>
+    <div className="cm-view cm-view--query" data-testid="query-view">
+      <section className="cm-panel cm-query-panel">
+        <div className="cm-panel-title">query</div>
+        <textarea
+          className="cm-input cm-textarea"
+          rows={3}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="ask a question about this repo — evolution, why, tradeoffs…"
+          data-testid="query-input"
+          spellCheck={false}
+        />
+        <div className="cm-query-controls">
+          <label className="cm-inline-label">
+            <span className="cm-label">token_budget</span>
+            <input
+              className="cm-input cm-input--narrow"
+              type="number"
+              min={0}
+              step={1000}
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              data-testid="budget-input"
+            />
+          </label>
+          <button
+            className="cm-btn cm-btn--primary"
+            onClick={run}
+            disabled={busy || !token || !q.trim()}
+            data-testid="run-query-btn"
+          >
+            {busy ? "querying…" : "ask"}
+          </button>
+          {elapsed != null && <span className="cm-elapsed" data-testid="query-elapsed">{(elapsed/1000).toFixed(2)}s</span>}
+          {!treeExists && <span className="cm-err-inline">no tree — index first</span>}
         </div>
-      )}
-    </section>
+
+        {busy && (
+          <div className="cm-skeletons cm-skeletons--wide" data-testid="query-loading">
+            <div className="cm-skel cm-skel--tall" />
+            <div className="cm-skel" /><div className="cm-skel" />
+          </div>
+        )}
+
+        {err && (
+          <pre className="cm-pre cm-pre--err" data-testid="query-error">
+            {JSON.stringify(err, null, 2)}
+          </pre>
+        )}
+
+        {result && (
+          <div className="cm-query-result">
+            <div className="cm-stats cm-stats--slim" data-testid="query-stats">
+              <div className="cm-stat">
+                <div className="cm-stat-value" data-testid="stat-token-count">{result.token_count}</div>
+                <div className="cm-stat-label">tokens packed</div>
+              </div>
+              <div className="cm-stat">
+                <div className="cm-stat-value" data-testid="stat-baseline">{result.naive_baseline_tokens}</div>
+                <div className="cm-stat-label">naive baseline</div>
+              </div>
+              <div className="cm-stat">
+                <div className="cm-stat-value" data-testid="stat-savings">
+                  {savings == null ? "—" : `${savings}%`}
+                </div>
+                <div className="cm-stat-label">saved vs naive</div>
+              </div>
+              <div className="cm-stat">
+                <div className="cm-stat-value" data-testid="stat-paths">{result.nodes_used.length}</div>
+                <div className="cm-stat-label">node paths</div>
+              </div>
+            </div>
+
+            <div className="cm-panel-title cm-panel-title--sub">answer</div>
+            <pre className="cm-pre cm-pre--code" data-testid="query-answer">{result.answer}</pre>
+
+            <details className="cm-details" open>
+              <summary>nodes used ({result.nodes_used.length})</summary>
+              <ul className="cm-paths-list" data-testid="query-paths">
+                {result.nodes_used.map((p, i) => (
+                  <li key={i} className="cm-path-item">{p}</li>
+                ))}
+              </ul>
+            </details>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
-// ------------------------- app ------------------------- //
-function App() {
-  const [token, setTokenRaw] = useState(
-    () => window.localStorage.getItem("codememory_token") || ""
+// -------------------- node detail page -------------------- //
+function NodeDetailPage({ tree, nodeId, onClearSelection }) {
+  const node = nodeId && tree && tree.nodes ? tree.nodes[nodeId] : null;
+  if (!node) {
+    return (
+      <div className="cm-view" data-testid="node-view">
+        <section className="cm-panel">
+          <div className="cm-panel-title">detail</div>
+          <div className="cm-empty" data-testid="detail-empty">
+            select a node in the tree sidebar to see its title, summary, content and metadata.
+          </div>
+        </section>
+      </div>
+    );
+  }
+  const meta = node.metadata || {};
+  return (
+    <div className="cm-view" data-testid="node-view">
+      <section className="cm-panel cm-detail">
+        <div className="cm-detail-head">
+          <span className={"cm-tree-badge cm-tree-badge--" + node.type}>{node.type}</span>
+          <h2 className="cm-detail-title" data-testid="node-title">{node.title || node.id}</h2>
+          <button className="cm-btn cm-btn--ghost" onClick={onClearSelection} data-testid="clear-selection-btn">
+            close
+          </button>
+        </div>
+
+        {(meta.pr_number || meta.issue_number || meta.file_path || meta.author || meta.merged_at || meta.html_url) && (
+          <div className="cm-meta-strip" data-testid="node-meta-strip">
+            {meta.pr_number && <span className="cm-meta">PR #{meta.pr_number}</span>}
+            {meta.issue_number && <span className="cm-meta">Issue #{meta.issue_number}</span>}
+            {meta.file_path && <span className="cm-meta">{meta.file_path}</span>}
+            {meta.author && <span className="cm-meta">by @{meta.author}</span>}
+            {meta.merged_at && <span className="cm-meta">merged {String(meta.merged_at).slice(0,10)}</span>}
+            {meta.html_url && meta.html_url.startsWith("http") && (
+              <a className="cm-meta cm-meta--link" href={meta.html_url} target="_blank" rel="noreferrer noopener">
+                github ↗
+              </a>
+            )}
+          </div>
+        )}
+
+        {node.summary && (
+          <>
+            <div className="cm-panel-title cm-panel-title--sub">summary</div>
+            <pre className="cm-pre" data-testid="node-summary">{node.summary}</pre>
+          </>
+        )}
+        {node.content && (
+          <>
+            <div className="cm-panel-title cm-panel-title--sub">content</div>
+            <pre className="cm-pre cm-pre--code" data-testid="node-content">{node.content}</pre>
+          </>
+        )}
+        <details className="cm-details">
+          <summary>raw metadata</summary>
+          <pre className="cm-pre cm-pre--muted" data-testid="node-metadata">
+            {JSON.stringify(node.metadata || {}, null, 2)}
+          </pre>
+        </details>
+      </section>
+    </div>
   );
+}
+
+// -------------------- global banners -------------------- //
+function GlobalBanners({ health, authOk, token }) {
+  const banners = [];
+  if (health.state === "down") {
+    banners.push(
+      <div key="be" className="cm-banner cm-banner--err" data-testid="banner-backend-down">
+        backend unreachable — check that /api/health responds
+      </div>
+    );
+  }
+  if (!token) {
+    banners.push(
+      <div key="notoken" className="cm-banner cm-banner--warn" data-testid="banner-no-token">
+        no bearer token set — open <b>settings</b> and paste your CODEMEMORY_API_TOKEN
+      </div>
+    );
+  } else if (authOk === false) {
+    banners.push(
+      <div key="badtoken" className="cm-banner cm-banner--err" data-testid="banner-auth-error">
+        the bearer token was rejected (401) — open <b>settings</b> to fix
+      </div>
+    );
+  }
+  if (banners.length === 0) return null;
+  return <div className="cm-banners">{banners}</div>;
+}
+
+// -------------------- app -------------------- //
+function App() {
+  const [token, setTokenRaw] = useState(() => window.localStorage.getItem("codememory_token") || "");
   const setToken = useCallback((v) => {
     setTokenRaw(v);
-    window.localStorage.setItem("codememory_token", v);
+    window.localStorage.setItem("codememory_token", v || "");
   }, []);
 
   const [health, setHealth] = useState({ state: "checking" });
+  const [authOk, setAuthOk] = useState(null); // null=unknown, true=ok, false=rejected
+  const [settingsOpen, setSettingsOpen] = useState(!token);
+
   const [status, setStatus] = useState({
     status: "idle",
     progress: { stage: "idle", detail: "" },
@@ -528,32 +608,54 @@ function App() {
   });
   const [currentRepo, setCurrentRepo] = useState(DEFAULT_REPO);
   const [tree, setTree] = useState({ exists: false, nodes: {}, root_id: null });
+  const [treeLoading, setTreeLoading] = useState(false);
+  const [treeError, setTreeError] = useState(null);
+
+  const [view, setView] = useState("home"); // "home" | "query" | "node"
   const [selected, setSelected] = useState(null);
 
-  // ---- health polling (once + button) ----
+  // ---- health poll ----
   const refreshHealth = useCallback(async () => {
     setHealth({ state: "checking" });
     try {
-      const r = await apiFetch("/health");
+      const r = await apiFetch("/health", { timeout: 6000 });
       setHealth({ state: r.status === "ok" ? "ok" : "down" });
-    } catch {
-      setHealth({ state: "down" });
-    }
+    } catch { setHealth({ state: "down" }); }
   }, []);
   useEffect(() => { refreshHealth(); }, [refreshHealth]);
 
-  // ---- fetch tree helper ----
+  // ---- auth probe (whenever token changes) ----
+  useEffect(() => {
+    if (!token) { setAuthOk(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        await apiFetch("/index/status", { token, timeout: 8000 });
+        if (!cancelled) setAuthOk(true);
+      } catch (e) {
+        if (cancelled) return;
+        setAuthOk(e.status === 401 ? false : null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  // ---- tree loader ----
   const loadTree = useCallback(async (owner, name) => {
     if (!token) return;
+    setTreeLoading(true); setTreeError(null);
     try {
-      const t = await apiFetch(`/tree?owner=${encodeURIComponent(owner)}&name=${encodeURIComponent(name)}`, { token });
+      const t = await apiFetch(
+        `/tree?owner=${encodeURIComponent(owner)}&name=${encodeURIComponent(name)}`,
+        { token, timeout: 12000 }
+      );
       setTree(t);
-      if (t.exists && t.root_id && !selected) setSelected(t.root_id);
     } catch (e) {
-      // silent; status panel will surface auth errors on next poll
-      console.warn("load tree:", e.message);
+      setTree({ exists: false, nodes: {}, root_id: null });
+      setTreeError(e.status === 401 ? "invalid bearer token" : e.message);
+    } finally {
+      setTreeLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   // ---- initial status + tree load ----
@@ -561,19 +663,19 @@ function App() {
     if (!token) return;
     (async () => {
       try {
-        const s = await apiFetch("/index/status", { token });
+        const s = await apiFetch("/index/status", { token, timeout: 8000 });
         setStatus(s);
         if (s.repo) {
           const [o, n] = s.repo.split("/");
           if (o && n) {
-            setCurrentRepo({ owner: o, name: n, paths: currentRepo.paths });
+            setCurrentRepo((prev) => ({ ...prev, owner: o, name: n }));
             loadTree(o, n);
             return;
           }
         }
         loadTree(currentRepo.owner, currentRepo.name);
-      } catch (e) {
-        // token likely wrong
+      } catch {
+        /* auth probe surfaces */
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -588,15 +690,13 @@ function App() {
     }
     pollRef.current = setInterval(async () => {
       try {
-        const s = await apiFetch("/index/status", { token });
+        const s = await apiFetch("/index/status", { token, timeout: 6000 });
         setStatus(s);
         if (s.status === "complete") {
           loadTree(currentRepo.owner, currentRepo.name);
           setSelected(null);
         }
-      } catch (e) {
-        // ignore transient
-      }
+      } catch { /* transient */ }
     }, 1500);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -612,52 +712,86 @@ function App() {
     setTree({ exists: false, nodes: {}, root_id: null });
   }, []);
 
-  const treeStats = useMemo(() => {
-    if (!tree?.exists) return null;
-    const counts = {};
-    for (const n of Object.values(tree.nodes)) counts[n.type] = (counts[n.type] || 0) + 1;
-    return counts;
-  }, [tree]);
+  const onLoadExisting = useCallback(async (o, n) => {
+    setCurrentRepo((prev) => ({ ...prev, owner: o, name: n }));
+    setSelected(null);
+    await loadTree(o, n);
+  }, [loadTree]);
+
+  const handleTreeSelect = useCallback((id) => {
+    setSelected(id);
+    setView("node");
+  }, []);
+
+  const selectedNode = selected && tree.nodes ? tree.nodes[selected] : null;
 
   return (
-    <div className="cm-shell" data-testid="codememory-shell">
+    <div className="cm-app" data-testid="codememory-shell">
       <TopBar
         health={health}
         onRefreshHealth={refreshHealth}
-        token={token}
-        setToken={setToken}
+        authOk={authOk}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((s) => !s)}
       />
+      {settingsOpen && <SettingsPanel token={token} setToken={setToken} onClose={() => setSettingsOpen(false)} />}
+      <GlobalBanners health={health} authOk={authOk} token={token} />
 
-      <div className="cm-top-grid">
-        <RepoForm
-          token={token}
-          disabled={status.status === "indexing"}
-          onStarted={onStarted}
-          onLoadExisting={async (o, n) => {
-            setCurrentRepo((prev) => ({ ...prev, owner: o, name: n }));
-            setSelected(null);
-            await loadTree(o, n);
-          }}
+      <div className="cm-app-body">
+        <AppSidebar
+          tree={tree}
+          treeLoading={treeLoading}
+          treeError={treeError}
+          selected={selected}
+          onSelect={handleTreeSelect}
+          currentRepo={currentRepo}
         />
-        <StatusPanel status={status} />
-      </div>
 
-      {treeStats && (
-        <div className="cm-stats cm-stats--slim" data-testid="tree-stats">
-          {Object.entries(treeStats).map(([k, v]) => (
-            <div key={k} className="cm-stat" data-testid={`tree-stat-${k}`}>
-              <div className="cm-stat-value">{v}</div>
-              <div className="cm-stat-label">{k}</div>
-            </div>
-          ))}
-        </div>
-      )}
+        <main className="cm-main">
+          <nav className="cm-tabs" data-testid="app-tabs">
+            <button
+              className={"cm-tab" + (view === "home" ? " is-active" : "")}
+              onClick={() => setView("home")}
+              data-testid="tab-home"
+            >home</button>
+            <button
+              className={"cm-tab" + (view === "query" ? " is-active" : "")}
+              onClick={() => setView("query")}
+              data-testid="tab-query"
+            >query</button>
+            <button
+              className={"cm-tab" + (view === "node" ? " is-active" : "") + (selectedNode ? "" : " is-dim")}
+              onClick={() => setView("node")}
+              data-testid="tab-node"
+            >
+              detail{selectedNode ? <span className="cm-tab-sub">· {selectedNode.title || selectedNode.id}</span> : null}
+            </button>
+          </nav>
 
-      <QueryPanel token={token} currentRepo={currentRepo} treeExists={!!tree?.exists} />
-
-      <div className="cm-tree-grid">
-        <TreeSidebar tree={tree} selected={selected} onSelect={setSelected} />
-        <NodeDetail tree={tree} nodeId={selected} />
+          {view === "home" && (
+            <HomePage
+              token={token}
+              status={status}
+              tree={tree}
+              onStarted={onStarted}
+              onLoadExisting={onLoadExisting}
+            />
+          )}
+          {view === "query" && (
+            <QueryPage
+              token={token}
+              currentRepo={currentRepo}
+              treeExists={!!(tree && tree.exists)}
+            />
+          )}
+          {view === "node" && (
+            <NodeDetailPage
+              tree={tree}
+              nodeId={selected}
+              onClearSelection={() => { setSelected(null); }}
+            />
+          )}
+        </main>
       </div>
 
       <footer className="cm-footer">

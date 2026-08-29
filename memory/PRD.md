@@ -13,26 +13,26 @@ Storage:
 
 ## Phase plan
 - **Phase 0 — Risk POC (complete, 2026-02).**
-- **Phase 1 — Ingestion pipeline + RAPTOR tree (complete, 2026-02):**
-  `POST /api/index`, `GET /api/index/status`, `GET /api/tree`. Recursive GitHub
-  fetch (git trees + blobs, retry-after aware), token-capped chunkers,
-  hierarchical KMeans + gpt-5 summaries, atomic tree swap via `os.replace`.
-- **Phase 2 — Retrieval + `/api/query` (complete, 2026-02):**
-  Token-aware RAPTOR retrieval + gpt-5 answer.
-  - Embed query → Chroma top-N across ALL levels (chunks + summary embeddings).
-  - Score = similarity + level-mix bonus (subsystem +0.05, topic +0.03).
-  - Greedy pack under `token_budget` with **guarantee**: ≥1 subsystem + ≥2 topics
-    (parents pulled from the tree if search didn't surface them).
-  - Edge cases: `budget=0` → structured "too small" response (HTTP 200);
-    no index yet → structured "no repository indexed" response (HTTP 200).
-  - Context wrapped in explicit `<<<REPOSITORY_CONTEXT_START/END>>>` delimiters
-    so prompt-injection content in PR/issue bodies is unmistakably DATA.
-  - `naive_baseline_tokens` = sum of tiktokens of every PR chunk (desc+diff)
-    in the tree — "if you'd naively dumped every PR as context" upper bound.
-  - Frontend: query textarea + budget input + stats strip
-    (tokens packed / naive baseline / **saved-vs-naive %** / paths cited)
-    + answer viewer + collapsible node-paths list.
-- **Phase 3 — Product UI + Chrome extension** (CORS already permits `chrome-extension://*`).
+- **Phase 1 — Ingestion + RAPTOR tree (complete, 2026-02).**
+- **Phase 2 — Retrieval + `/api/query` (complete, 2026-02).**
+- **Phase 3 — Web UI completion (complete, 2026-02):**
+  - Persistent left tree sidebar (sticky, scrollable, colored type badges,
+    iterative renderer — no recursive JSX, no babel-traverse stack blowups).
+  - Tabbed main area: **Home** (repo form + status + tree stats) · **Query**
+    (textarea + budget + savings contrast) · **Detail** (title, summary,
+    content, PR#/file/author/merged_at meta strip, raw metadata drawer).
+  - Settings popover with the bearer-token input (localStorage; auto-opens
+    when the token is empty).
+  - Global banners: backend-unreachable, no-token, 401 rejected.
+  - Auth probe on token change — `token: ok` / `token: invalid` chip in the
+    top bar; every view reacts to a bad token.
+  - Loading skeletons for tree + query; every fetch has an explicit timeout
+    (6s health / 8s status / 12s tree / 15s index start / 90s query) so no
+    infinite spinner is possible.
+  - Distinct error states surfaced with `data-testid`s: `banner-backend-down`,
+    `banner-no-token`, `banner-auth-error`, `tree-error`, `status-error`,
+    `query-error`, `repo-form-error`.
+- **Phase 4 — Chrome extension** (CORS already permits `chrome-extension://*`).
 
 ## Personas
 - Repo maintainer, new contributor, AI copilot integration (extension).
