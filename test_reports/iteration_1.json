@@ -1,0 +1,49 @@
+{
+  "summary": "Full E2E test of CodeMemory Phase 0 POC. Backend: 13/13 pytest tests passed (health, bearer auth 401 paths, full POC chain with real gpt-5, openapi spec, CORS preflight for chrome-extension:// and frontend origins, Chroma on-disk persistence + persistence across a `supervisorctl restart backend`). Frontend: dev console loads, green api:ok indicator, disabled-button gating, wrong-token error path, and a real POC run producing a 1593-char gpt-5 summary referencing actual pallets/itsdangerous PRs (#404-#408) plus all 5 stat tiles (8/8/2/328/true). No blocking issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/poc", "issue": "Unauthenticated GitHub REST is used (60 req/hr/IP) and github_client raises httpx.HTTPStatusError via raise_for_status(), which is NOT caught in the /api/poc handler. On a GitHub 403 rate-limit (5 GH calls per POC run) the endpoint will surface an unhandled 500 instead of the intended 502. Not reproduced during this run (all runs returned 200), but latent."},
+      {"endpoint": "POST /api/poc", "issue": "`chroma_persisted` is computed as `any(Path(chroma_dir).iterdir())` — it only checks the directory is non-empty, so it returns true even if the upsert silently failed. Weak proxy; prefer asserting coll.count() > 0 after a fresh get_or_create."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "DevConsole (desktop 1920x1080)", "issues": ["Elapsed-time text next to run-poc button (data-testid='elapsed') is very low contrast dark-grey on near-black (~2:1) — hard to read.", "Large empty vertical gap between the response panel and the footer when content is short; footer floats mid-page rather than being pinned."]},
+      {"screen": "DevConsole (mobile 390x844)", "issues": ["Brand mark '{ }' wraps onto two lines making the logo tile abnormally tall.", "Disabled 'run poc' button keeps the same green fill as the enabled state — no visual affordance that it is disabled (it IS correctly disabled functionally)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/manual_checks.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Wrap the GitHub calls in /api/poc with try/except httpx.HTTPStatusError -> HTTPException(502) so a GitHub rate-limit does not leak a 500.",
+    "Make `chroma_persisted` a real assertion (collection count after reopen) instead of a directory-non-empty check.",
+    "Optional polish: raise contrast on data-testid='elapsed'; add a disabled style for run-poc-btn; prevent '{ }' brand mark wrapping on mobile.",
+    "Optional hardening: use secrets.compare_digest in require_bearer instead of `!=` (timing-safe token comparison)."
+  ],
+  "critical_code_review_comments": [
+    "server.py: httpx.HTTPStatusError from recent_merged_prs/fetch_files_in_dir is unhandled -> 500 on GitHub rate-limit/404. Only LLMError is mapped to 502.",
+    "llm.py call_llm catches bare Exception and retries — a missing EMERGENT_LLM_KEY (LLMError) triggers a pointless retry + 1s sleep before failing. Exclude non-retryable config errors.",
+    "server.py require_bearer uses non-constant-time string comparison for the shared secret.",
+    "/api/openapi.json, /api/docs and /api/redoc are publicly exposed with no auth; acceptable for POC but should be gated before any public deploy.",
+    "All files are well under 700 lines, env vars are read via os.environ / process.env.REACT_APP_BACKEND_URL with no hardcoded URLs, and all interactive elements carry data-testid — good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/manual_checks.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "None. The POC endpoint upserts 8 chunks (5 PRs + 3 files from pallets/itsdangerous) into the persistent Chroma collection 'codememory_poc' at /app/backend/data/chroma; upserts are idempotent so count stayed at 8 across 4 runs.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Bearer token read from /app/memory/test_credentials.md: codememory-dev-token-xzcU5a772sHS7PMx8LkLN7Iyj003MDVa (valid, works for /api/poc)",
+  "context_for_next_testing_agent": "Backend suite lives at /app/backend/tests/backend_test.py with conftest.py (session-scoped `poc_result` fixture runs POST /api/poc once; note pytest.ini forces -n 2 --dist loadscope so the POC actually runs once per worker — ~2 real gpt-5 calls per suite run, total ~26s). Run: `cd /app/backend && python -m pytest tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml`. manual_checks.py dumps a full POC payload + Chroma count (`python tests/manual_checks.py poc` or any other arg for chroma-only). Chroma persistence across restart was verified manually (restart backend, then chroma-only check => 8). Frontend POC run takes ~16s; use 150s Playwright timeouts. Out of scope in Phase 0: /api/index, /api/query, ingestion pipeline, tree store — do not test.",
+  "rca_of_the_issue": "No failures to root-cause. All 8 requested feature checks passed. The two minor backend items are latent robustness gaps identified by code review, not observed failures."
+}
