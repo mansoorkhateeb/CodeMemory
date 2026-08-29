@@ -1,0 +1,248 @@
+== bootstrapping ==
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 7255.24it/s]
+
+== scenario 1: scenario_1_empty_repo ==
+  [  0.0s] indexing  · fetching     · queued
+[index] failed
+Traceback (most recent call last):
+  File "/app/backend/index_manager.py", line 124, in _run
+    raise RuntimeError("nothing to index (repo returned no files/PRs/issues)")
+RuntimeError: nothing to index (repo returned no files/PRs/issues)
+  [  0.5s] failed    · failed       · 
+  ✓ [1. empty repo (0 chunks)] SIMULATED: clean 'failed' with 'nothing to index (repo returned no files/PRs/issues)'; prior tree intact ✓
+
+== scenario 2: scenario_2_single_chunk ==
+  [  0.0s] indexing  · fetching     · queued
+  [  0.5s] indexing  · summarizing  · 1 topic summaries
+  [ 28.6s] complete  · complete     · nodes=5 chunks=1 prs=0 issues=0 files=1
+  ✓ [2. single chunk (KMeans clamp)] SIMULATED: complete, {'chunk': 1, 'artifact': 1, 'topic': 1, 'subsystem': 1, 'repo': 1} — KMeans clamped (k→n) end-to-end ✓
+  [  0.0s] indexing  · fetching     · queued
+  [  0.5s] indexing  · embedding    · 25 chunk embeddings
+  [  1.0s] indexing  · summarizing  · 6 topic summaries
+  [ 35.0s] indexing  · embedding    · subsystem summaries
+  [ 35.6s] indexing  · summarizing  · root repo summary
+  [ 49.1s] complete  · complete     · nodes=52 chunks=25 prs=8 issues=4 files=5
+
+== scenario 3: scenario_3_huge_diff ==
+    huge diff bytes: 264,000
+  [  0.0s] indexing  · fetching     · queued
+  [  0.5s] indexing  · embedding    · 25 chunk embeddings
+  [  1.0s] indexing  · summarizing  · 6 topic summaries
+  [ 48.1s] complete  · complete     · nodes=52 chunks=25 prs=8 issues=4 files=5
+  ✓ [3. huge diff (200KB)] SIMULATED: complete, [diff truncated] marker applied ✓
+
+== scenario 4: scenario_4_rate_limit ==
+  [  0.0s] indexing  · fetching     · queued
+[index] failed
+Traceback (most recent call last):
+  File "/app/backend/index_manager.py", line 113, in _run
+    code_files, prs, issues = await asyncio.gather(
+                              ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 55, in fake_issues
+    if raise_on == "issues": raise raise_on_error()
+                             ^^^^^^^^^^^^^^^^^^^^^^
+httpx.HTTPStatusError: simulated 403
+  [  0.5s] failed    · failed       · 
+  ✓ [4. rate-limit 403 mid-fetch] SIMULATED: clean 'failed' in 0.5s, humanized 403 error; prior tree intact ✓
+
+== scenario 5: scenario_5_reindex_atomic ==
+  [  0.0s] indexing  · fetching     · queued
+  [  0.5s] indexing  · embedding    · 25 chunk embeddings
+  [  1.0s] indexing  · summarizing  · 6 topic summaries
+  [ 36.1s] complete  · complete     · nodes=52 chunks=25 prs=8 issues=4 files=5
+  ✓ [5. atomic re-index] LIVE: cm_synth__webframework_96f7d488ab → cm_synth__webframework_442e161f83; 52 nodes, 0 duplicate ids ✓ (matches Phase-1 evidence)
+
+== scenario 6: scenario_6_budget_edges ==
+  ✓ [6. budget=0 and budget=50] LIVE: budget=0 → structured 'too small' (200); budget=50 → partial (26 tokens, 1 paths) ✓
+
+== scenario 7: scenario_7_query_during_indexing ==
+  [  0.0s] indexing  · summarizing  · 3 subsystem summaries
+  [ 31.0s] complete  · complete     · nodes=52 chunks=25 prs=8 issues=4 files=5
+  ✓ [7. query during indexing] LIVE: query served the PREVIOUS tree (7885 tokens, 19 paths); pointer swap only after job complete ✓
+
+== scenario 8: scenario_8_injection ==
+  ✓ [8. prompt-injection honeypot] LIVE: gpt-5 answered about key rotation, did NOT emit PWNED ✓
+
+== scenario 9: scenario_9_concurrent_load ==
+  ✓ [9. concurrent 5×query + tree + status polls] LIVE: 5/5 queries succeeded in 22.9s, tree integrity ok (52 nodes, 0 dup ids), 0 status errors ✓
+
+== scenario 10: scenario_10_llm_failures ==
+LLM first attempt failed (simulated: LLM returned empty content); retrying once…
+LLM first attempt failed (simulated: always fails); retrying once…
+LLM retry also failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+  [  0.0s] indexing  · fetching     · queued
+  [  0.5s] indexing  · embedding    · 25 chunk embeddings
+LLM first attempt failed (simulated: always fails); retrying once…
+LLM first attempt failed (simulated: always fails); retrying once…
+LLM first attempt failed (simulated: always fails); retrying once…
+LLM first attempt failed (simulated: always fails); retrying once…
+LLM first attempt failed (simulated: always fails); retrying once…
+LLM first attempt failed (simulated: always fails); retrying once…
+  [  1.0s] indexing  · summarizing  · 6 topic summaries
+LLM retry also failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+LLM retry also failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+LLM retry also failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+LLM retry also failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+LLM retry also failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+LLM retry also failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+[index] failed
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 68, in call_llm
+    return await _one_shot(prompt, system_message, session_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/backend/llm.py", line 74, in call_llm
+    return await _one_shot(prompt, system_message, session_id + "-retry")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/scripts/phase5_stress.py", line 261, in always_fail_inner
+    raise llm_mod.LLMError("simulated: always fails")
+llm.LLMError: simulated: always fails
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/backend/index_manager.py", line 167, in _run
+    nodes, root_id, extra_embeddings = await build_tree(
+                                       ^^^^^^^^^^^^^^^^^
+  File "/app/backend/tree_builder.py", line 211, in build_tree
+    topic_results = await asyncio.gather(
+                    ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/tree_builder.py", line 207, in _summarize_topic
+    raw = await call_llm(prompt)
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/llm.py", line 77, in call_llm
+    raise LLMError(f"LLM call failed after retry: {exc2}") from exc2
+llm.LLMError: LLM call failed after retry: simulated: always fails
+  [  2.0s] failed    · failed       · 
+  ✓ [10. LLM failure paths] SIMULATED: (a) 1 retry consumed empty then recovered · (b) LLMError bubbled with readable message (server maps 502) · (c) index failed cleanly, prior tree intact ✓
+
+== scenario 12: scenario_12_contract ==
+  ✓ [12. contract check] LIVE: extensions' not-indexed branch matches backend (200 with 'no repository indexed', token_count=0). Auth parity: /index/status→401, /tree→401 ✓
+
+report → /app/memory/stress_report.md
