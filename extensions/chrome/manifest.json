@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "CodeMemory",
+  "version": "0.1.0",
+  "description": "Hierarchical token-aware memory over a GitHub repo — ask about evolution, PRs, decisions.",
+  "action": {
+    "default_title": "Ask CodeMemory",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": { "service_worker": "background.js" },
+  "options_page": "options.html",
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": [
+    "https://raptor-code-poc.preview.emergentagent.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ]
+}

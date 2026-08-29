@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="popup.css"></head>
+<body style="width: 480px;">
+  <header class="hd">
+    <span class="mark">{ }</span>
+    <div>
+      <div class="title">CodeMemory — Options</div>
+      <div class="sub">Backend URL and API token</div>
+    </div>
+  </header>
+
+  <label class="lbl" for="url">backend url</label>
+  <input id="url" type="text" spellcheck="false" placeholder="https://raptor-code-poc.preview.emergentagent.com">
+
+  <label class="lbl" for="tok">api token (bearer)</label>
+  <input id="tok" type="password" spellcheck="false" autocomplete="off" placeholder="CODEMEMORY_API_TOKEN">
+
+  <div class="row" style="justify-content: flex-start; gap: 8px;">
+    <button id="save" class="btn primary">save</button>
+    <button id="test" class="btn">test connection</button>
+    <button id="grant" class="btn">grant host permission</button>
+  </div>
+
+  <div id="msg" class="banner" hidden></div>
+  <pre id="detail" class="pre" hidden></pre>
+
+  <script type="module" src="options.js"></script>
+</body></html>

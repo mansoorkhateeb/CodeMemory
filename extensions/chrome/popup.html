@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="hd">
+    <span class="mark">{ }</span>
+    <div>
+      <div class="title">CodeMemory</div>
+      <div class="sub" id="be-hint">…</div>
+    </div>
+    <button id="open-options" class="btn ghost" title="Open Options">options</button>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <label class="lbl" for="q">query</label>
+  <textarea id="q" rows="4" placeholder="ask about evolution, PRs, tradeoffs…" spellcheck="false"></textarea>
+
+  <div class="row">
+    <label class="lbl-inline">
+      token_budget
+      <input id="budget" type="number" min="0" step="1000" value="30000">
+    </label>
+    <button id="ask" class="btn primary">ask</button>
+    <span id="elapsed" class="elapsed"></span>
+  </div>
+
+  <div id="loading" class="loading" hidden>querying…</div>
+  <div id="error" class="error" hidden></div>
+
+  <section id="result" hidden>
+    <div class="stats">
+      <div class="stat"><div id="stat-tokens" class="v"></div><div class="l">tokens</div></div>
+      <div class="stat"><div id="stat-baseline" class="v"></div><div class="l">baseline</div></div>
+      <div class="stat"><div id="stat-savings" class="v"></div><div class="l">saved</div></div>
+      <div class="stat"><div id="stat-paths" class="v"></div><div class="l">paths</div></div>
+    </div>
+    <div class="lbl">answer</div>
+    <pre id="answer" class="pre"></pre>
+    <details><summary>node paths</summary><ul id="paths"></ul></details>
+  </section>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

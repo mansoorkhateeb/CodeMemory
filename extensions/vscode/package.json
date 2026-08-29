@@ -1,0 +1,65 @@
+{
+  "name": "codememory",
+  "displayName": "CodeMemory",
+  "description": "Hierarchical token-aware memory over a GitHub repo — ask about evolution, PRs, decisions.",
+  "version": "0.1.0",
+  "publisher": "codememory",
+  "engines": { "vscode": "^1.85.0" },
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "codememory.ask", "title": "CodeMemory: Ask a question" },
+      { "command": "codememory.setToken", "title": "CodeMemory: Set API Token" },
+      { "command": "codememory.refreshTree", "title": "CodeMemory: Refresh tree" }
+    ],
+    "configuration": {
+      "title": "CodeMemory",
+      "properties": {
+        "codememory.backendUrl": {
+          "type": "string",
+          "default": "https://raptor-code-poc.preview.emergentagent.com",
+          "description": "Base URL of the CodeMemory backend."
+        },
+        "codememory.repoOwner": {
+          "type": "string",
+          "default": "",
+          "description": "Optional repo owner to scope queries and the tree view."
+        },
+        "codememory.repoName": {
+          "type": "string",
+          "default": "",
+          "description": "Optional repo name to scope queries and the tree view."
+        },
+        "codememory.tokenBudget": {
+          "type": "number",
+          "default": 30000,
+          "description": "Default token_budget sent with /api/query."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "codememory", "title": "CodeMemory", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "codememory": [
+        { "id": "codememory.tree", "name": "Tree", "type": "webview" }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "node esbuild.js --production",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}

@@ -15,24 +15,19 @@ Storage:
 - **Phase 0 — Risk POC (complete, 2026-02).**
 - **Phase 1 — Ingestion + RAPTOR tree (complete, 2026-02).**
 - **Phase 2 — Retrieval + `/api/query` (complete, 2026-02).**
-- **Phase 3 — Web UI completion (complete, 2026-02):**
-  - Persistent left tree sidebar (sticky, scrollable, colored type badges,
-    iterative renderer — no recursive JSX, no babel-traverse stack blowups).
-  - Tabbed main area: **Home** (repo form + status + tree stats) · **Query**
-    (textarea + budget + savings contrast) · **Detail** (title, summary,
-    content, PR#/file/author/merged_at meta strip, raw metadata drawer).
-  - Settings popover with the bearer-token input (localStorage; auto-opens
-    when the token is empty).
-  - Global banners: backend-unreachable, no-token, 401 rejected.
-  - Auth probe on token change — `token: ok` / `token: invalid` chip in the
-    top bar; every view reacts to a bad token.
-  - Loading skeletons for tree + query; every fetch has an explicit timeout
-    (6s health / 8s status / 12s tree / 15s index start / 90s query) so no
-    infinite spinner is possible.
-  - Distinct error states surfaced with `data-testid`s: `banner-backend-down`,
-    `banner-no-token`, `banner-auth-error`, `tree-error`, `status-error`,
-    `query-error`, `repo-form-error`.
-- **Phase 4 — Chrome extension** (CORS already permits `chrome-extension://*`).
+- **Phase 3 — Web UI completion (complete, 2026-02).**
+- **Phase 4 — Chrome + VS Code extensions (complete, 2026-02):**
+  - `/app/extensions/chrome/` — MV3, vanilla JS. Popup (query + budget + answer/stats/paths), context menu ("Ask CodeMemory about this" on selection → pre-fills popup), options page (backend URL + token + `test connection` + runtime host-permission grant). `host_permissions` restricted to the preview URL; `optional_host_permissions` for other origins granted at runtime via `chrome.permissions.request`. Packaged: **/app/extensions/codememory-chrome.zip** (14 files).
+  - `/app/extensions/vscode/` — TypeScript, esbuild bundle, `@vscode/vsce` packaged. Sidebar webview tree, "Ask a question" command → webview panel, status-bar poller (15s, auto-stops after 4 consecutive failures). API token stored in **SecretStorage** only (no plain setting). Packaged: **/app/extensions/codememory-vscode.vsix** (11 files, 18.87 KB).
+  - Live-backend verification of both `api.js` / `api.ts` layers: 5/5 scenarios pass (health, unreachable → humanized, bad token → 401, real /api/query round-trip, timeout → humanized).
+
+## Backlog
+- **P0:** run first real index against a live public repo with a GitHub PAT (unauth is 60 req/hr; anything > 5 PRs blows past it).
+- **P1:** silhouette-based k-selection instead of hard heuristics.
+- **P1:** per-repo status history so a page reload knows what was indexed.
+- **P2:** artifact-level summaries (currently artifacts have no summary to save LLM cost).
+- **P2:** replace placeholder Chrome extension icons with real ones.
+- **P3:** rate limiting, per-user isolation, background workers/queues.
 
 ## Personas
 - Repo maintainer, new contributor, AI copilot integration (extension).
