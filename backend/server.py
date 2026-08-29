@@ -17,6 +17,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.cors import CORSMiddleware
 
@@ -231,6 +232,36 @@ async def query_endpoint(
         )
     except LLMError as e:
         raise HTTPException(status_code=502, detail=f"LLM failed: {e}") from e
+
+
+# --------------------------------------------------------------------------- #
+# Public download routes for the packaged extensions.
+# No bearer required — these artifacts contain no secrets.
+# --------------------------------------------------------------------------- #
+_EXT_DIR = Path("/app/extensions")
+
+def _serve_artifact(filename: str, media_type: str) -> FileResponse:
+    fp = _EXT_DIR / filename
+    if not fp.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not found")
+    return FileResponse(
+        path=str(fp),
+        media_type=media_type,
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api.api_route("/downloads/chrome", methods=["GET", "HEAD"])
+async def download_chrome() -> FileResponse:
+    """Public download of the packaged Chrome extension (MV3, vanilla JS)."""
+    return _serve_artifact("codememory-chrome.zip", "application/zip")
+
+
+@api.api_route("/downloads/vscode", methods=["GET", "HEAD"])
+async def download_vscode() -> FileResponse:
+    """Public download of the packaged VS Code extension (.vsix)."""
+    return _serve_artifact("codememory-vscode.vsix", "application/octet-stream")
 
 
 app.include_router(api)

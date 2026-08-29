@@ -350,6 +350,8 @@ function TreeStats({ tree }) {
 }
 
 function HomePage({ token, status, tree, onStarted, onLoadExisting }) {
+  const chromeUrl = `${API}/downloads/chrome`;
+  const vscodeUrl = `${API}/downloads/vscode`;
   return (
     <div className="cm-view cm-view--home" data-testid="home-view">
       <div className="cm-home-grid">
@@ -362,6 +364,30 @@ function HomePage({ token, status, tree, onStarted, onLoadExisting }) {
         <StatusPanel status={status} />
       </div>
       <TreeStats tree={tree} />
+      <section className="cm-panel" data-testid="downloads-panel">
+        <div className="cm-panel-title">get the extensions</div>
+        <div className="cm-actions" style={{ marginTop: 0 }}>
+          <a
+            className="cm-btn"
+            href={chromeUrl}
+            data-testid="download-chrome-btn"
+            download
+          >
+            ↓ Chrome extension (.zip)
+          </a>
+          <a
+            className="cm-btn"
+            href={vscodeUrl}
+            data-testid="download-vscode-btn"
+            download
+          >
+            ↓ VS Code extension (.vsix)
+          </a>
+          <span className="cm-hint" style={{ margin: 0 }}>
+            no auth required · configure the backend URL + your bearer token after install
+          </span>
+        </div>
+      </section>
     </div>
   );
 }
