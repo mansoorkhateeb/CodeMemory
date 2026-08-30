@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="CodeMemory architecture diagram">
+  <defs>
+    <style>
+      .title { font: 700 34px 'Segoe UI', Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 17px 'Segoe UI', Arial, sans-serif; fill: #334155; }
+      .h { font: 700 20px 'Segoe UI', Arial, sans-serif; fill: #0f172a; }
+      .t { font: 500 15px 'Segoe UI', Arial, sans-serif; fill: #334155; }
+      .small { font: 500 13px 'Segoe UI', Arial, sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 16; }
+      .panel { fill: #f8fafc; stroke: #94a3b8; stroke-width: 2; rx: 18; }
+      .accent { fill: #eff6ff; stroke: #60a5fa; stroke-width: 2; rx: 14; }
+      .green { fill: #f0fdf4; stroke: #4ade80; stroke-width: 2; rx: 14; }
+      .purple { fill: #faf5ff; stroke: #c084fc; stroke-width: 2; rx: 14; }
+      .arrow { stroke: #0f172a; stroke-width: 2.5; fill: none; marker-end: url(#m); }
+    </style>
+    <marker id="m" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#0f172a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="720" fill="#f1f5f9"/>
+  <text x="50" y="62" class="title">CodeMemory — End-to-End Architecture</text>
+  <text x="50" y="92" class="subtitle">Hierarchical repository memory for token-efficient codebase Q&amp;A</text>
+
+  <rect class="panel" x="40" y="130" width="300" height="540"/>
+  <text x="60" y="168" class="h">1) Ingestion Sources</text>
+  <rect class="box" x="60" y="190" width="260" height="110"/>
+  <text x="78" y="225" class="t">GitHub Code Files</text>
+  <text x="78" y="252" class="small">Repo paths and source content</text>
+  <rect class="box" x="60" y="320" width="260" height="110"/>
+  <text x="78" y="355" class="t">Pull Requests</text>
+  <text x="78" y="382" class="small">Descriptions, diffs, comments</text>
+  <rect class="box" x="60" y="450" width="260" height="110"/>
+  <text x="78" y="485" class="t">Issues</text>
+  <text x="78" y="512" class="small">Issue bodies and discussion context</text>
+
+  <rect class="panel" x="380" y="130" width="420" height="540"/>
+  <text x="400" y="168" class="h">2) Memory Construction (Backend)</text>
+  <rect class="accent" x="400" y="190" width="380" height="92"/>
+  <text x="420" y="223" class="t">Chunking + Token Caps</text>
+  <text x="420" y="248" class="small">Code / PR / issue chunks bounded for safe LLM use</text>
+  <rect class="accent" x="400" y="300" width="380" height="92"/>
+  <text x="420" y="333" class="t">Embeddings + Vector Store</text>
+  <text x="420" y="358" class="small">MiniLM embeddings persisted in Chroma</text>
+  <rect class="accent" x="400" y="410" width="380" height="92"/>
+  <text x="420" y="443" class="t">RAPTOR-style Hierarchy</text>
+  <text x="420" y="468" class="small">repo → subsystem → topic → artifact → chunk</text>
+  <rect class="accent" x="400" y="520" width="380" height="130"/>
+  <text x="420" y="553" class="t">Persistence + Safety</text>
+  <text x="420" y="578" class="small">Atomic JSON tree writes + cleanup on failed indexing</text>
+  <text x="420" y="603" class="small">Token auth for non-health endpoints</text>
+
+  <rect class="panel" x="840" y="130" width="400" height="540"/>
+  <text x="860" y="168" class="h">3) Retrieval &amp; Experience</text>
+  <rect class="green" x="860" y="190" width="360" height="92"/>
+  <text x="880" y="223" class="t">Token-Budgeted Retrieval</text>
+  <text x="880" y="248" class="small">Multi-level search + context packing</text>
+  <rect class="green" x="860" y="300" width="360" height="92"/>
+  <text x="880" y="333" class="t">Answer Generation</text>
+  <text x="880" y="358" class="small">LLM answer with structural provenance</text>
+  <rect class="purple" x="860" y="410" width="360" height="110"/>
+  <text x="880" y="443" class="t">Transparent Metrics</text>
+  <text x="880" y="468" class="small">token_count vs naive_baseline_tokens</text>
+  <rect class="purple" x="860" y="540" width="360" height="110"/>
+  <text x="880" y="573" class="t">Client Surfaces</text>
+  <text x="880" y="598" class="small">Web app, Chrome extension, VS Code extension</text>
+
+  <line class="arrow" x1="340" y1="400" x2="380" y2="400"/>
+  <line class="arrow" x1="800" y1="400" x2="840" y2="400"/>
+</svg>
